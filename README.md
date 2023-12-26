@@ -1,26 +1,21 @@
 # ewinch_remote_controller
  transmitter and receiver code for remote controlling a paragliding winch
- Based on LILYGO® TTGO ESP32-Paxcounter LoRa32 V2.1 1.6 Version 915MHZ LoRa ESP-32 OLED
- (http://www.lilygo.cn/prod_view.aspx?TypeId=50060&Id=1271&FId=t3:50060:3)
- 
- see 
- - https://www.youtube.com/watch?v=hUOhuwIBEUY
- - https://www.youtube.com/watch?v=hVimrIMGMSY&t=1s
- - https://www.youtube.com/watch?v=DOm1zkXft44
- - https://www.youtube.com/watch?v=bxIVrh16ZTE
- - https://www.youtube.com/watch?v=qTut_0KAwYU
+ forked from robertzach/ewinch_remote_controller
 
- receiver uses PPM for driving the winch and (optinal) UART to read additional information (line length, battery %, dutycycle)
- VESC UART communication depends on https://github.com/SolidGeek/VescUart/
-
-Pin Setup receiver:
-PWM_PIN_OUT  13
-VESC_RX  14    //connect to TX on Vesc
-VESC_TX  2    //connect to RX on Vesc
-
-transmitter buttons connected to GND:
-BUTTON_UP  15 
-BUTTON_DOWN  12
+receiver uses PPM for driving the winch and (optinal) UART to read additional information (line length, battery %, dutycycle)
+VESC UART communication depends on https://github.com/SolidGeek/VescUart/
 
 Line auto stop can be implemented within VESC with vesc_ppm_auto_stop.patch
 Default VESC app config is vesc_app_config.xml
+
+## Changes / Updates
+ Changed ESP32-Board to custom made with MH-ET-ESP32-Devkit and Heltec ESP32-Lora(v3).
+ chandrawi/LoRaRF-lib for usage of SX126x modul on Heltec v3.
+ Made new case for Heltec module, same size but different mount points.
+ Moved software project to PLATFORMIO using VSCode for convenience work.
+
+## Software improvements:
+ - rotary encoder in transmitter to adjust "max. weight" (push while switch on, then select and push to confirm)
+ - EEPROM function in transmitter to hold last "max. weight" value.
+ - rotary encoder in receiver used to pull manually (adjust force by turning, push stops immediately)
+
