@@ -6,9 +6,6 @@ Erweiterung der Funktionen:
  - Taster für Aktivierung Kapp-System
     -> Longpress (>1s) um Fehlbedienung zu vermeiden
 */
-
-
-
 /*
  * 
  * transmitter
@@ -18,8 +15,10 @@ Erweiterung der Funktionen:
  */
 // communication is locked to a specific transmitter for 5 seconds after his last message
 // admin ID 0 can allays take over communication
-static int myID = 1;    // set to your desired transmitter id!!! [unique number from 1 - 15]
+// ID and max pull can be adjustet in setup, push rotary when switching on to enter setup
+static int myID = 1;    // set to your desired transmitter id!!! [unique number from 1 - 15] 
 static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settings
+// with Setup Encoder you can set myId and myMaxPull by rotary encoder
 
 #include <Arduino.h>
 #include "common.h"
@@ -32,7 +31,7 @@ static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 #include <EEPROM.h>
 
 #define BUILD_TYPE_MH_ET_ESP32 1 
-#define BUILD_TYPE_HELTEC_V3   2
+#define BUILD_TYPE_HELTEC_V3   2 // with LoraRf Lib -> Not running actually
 #define BUILD_TYPE_HELTEC_RL   3
 
 #ifndef BUILD_TYPE
@@ -40,7 +39,8 @@ static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 #endif
 
 #define EEPROM_SIZE 20
-#define EEPROM_MAX_PULL 0
+#define EEPROM_DEVICE_ID 0
+#define EEPROM_MAX_PULL  1
 
 int rssi = 0;
 float snr = 0;
@@ -53,17 +53,16 @@ int8_t targetPull = 0;   // pull value range from -127 to 127
 int currentPull = 0;          // current active pull on vesc
 bool stateChanged = false;
 int currentState = -1;   // -2 = hard brake, -1 = soft brake, 0 = no pull/no brake, 1 = default pull (~3kg), 2 = pre pull, 3 = take off pull, 4 = full pull, 5 = extra strong pull
-int hardBrake = -20;  //in kg
-int softBrake = -7;  //in kg
-int defaultPull = 7;  //in kg
-int prePullScale = 18;      //in %
-int takeOffPullScale = 55;  //in %
-int fullPullScale = 80;     //in %
-int strongPullScale = 100;  //in %
+int hardBrake = -20;  //-20 kg
+int softBrake = -7;  //-7 kg
+int defaultPull = 7;  //7 kg
+int prePullScale = 18;      //18 %
+int takeOffPullScale = 55;  //55 %
+int fullPullScale = 80;     //80 %
+int strongPullScale = 100;  //100 %
 unsigned long lastStateSwitchMillis = 0;
 unsigned long nextMainTaskMillis = 0;
 
-unsigned char encIn, encInAlt, enc0, enc1, enc2;
 char txtOut[40];
 unsigned char setupActive;
 
@@ -79,7 +78,6 @@ unsigned long previousRxLoraMessageMillis = 0;
 
 unsigned int loraErrorCount = 0;
 unsigned long loraErrorMillis = 0;
-
 
 #define LORA_BAND  868E6
 
@@ -377,10 +375,36 @@ unsigned long loraErrorMillis = 0;
   //#define READS 20
 
 SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL); // SPI an G21 und G22
+int encValue = 0;
+unsigned char encIn, encInAlt, enc0, enc1, enc2;
+void rotaryInterrupt(void){
+  encIn = digitalRead(ROTARY_A)+digitalRead(ROTARY_B)*2;
+  if(encInAlt != encIn){
+    encInAlt = encIn;
+    enc0 = enc1;
+    enc1 = enc2;
+    enc2 = encIn;
+    if((enc0 == 0)&&(enc1 == 1)&&(enc2 == 3)){
+      encValue -= 1;
+    }
+    if((enc0 == 3)&&(enc1 == 2)&&(enc2 == 0)){
+      encValue -= 1;
+    }
+    if((enc0 == 0)&&(enc1 == 2)&&(enc2 == 3)){
+      encValue += 1;
+    }
+    if((enc0 == 3)&&(enc1 == 1)&&(enc2 == 0)){
+      encValue += 1;
+    }
+  }
+}
 
-
-
-
+void encoderInit(void){
+  pinMode(ROTARY_A, INPUT_PULLUP);
+  pinMode(ROTARY_B, INPUT_PULLUP);
+  attachInterrupt(ROTARY_A, rotaryInterrupt, CHANGE);
+  attachInterrupt(ROTARY_B, rotaryInterrupt, CHANGE);
+}
 
 void btnPressed(Button2& btn) {
     if (btn == btnUp) {
@@ -450,43 +474,63 @@ void display_write_setup_pull(int pull){
   display.display();
 }
 
+void display_write_setup_id(int devId){
+  display.clear();
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(0, 0, "Setup Menu");
+  sprintf(txtOut, "Device ID: %d", devId);
+  display.drawString(0, 18, txtOut);
+  display.display();
+}
+
 void setupMenue(void){
   myMaxPull = EEPROM.read(EEPROM_MAX_PULL);
+  int varSet;
+  myID = EEPROM.read(EEPROM_DEVICE_ID);
+  uint8_t setupStep = 0;
+  int8_t encRotation = 0;
   setupActive = 1;
   Serial.printf("Enter Setup Menu \n");
   display_write_setup_pull(myMaxPull);
   while(digitalRead(ROTARY_SW)==0);
   delay(400);
   while(setupActive){
-    encIn = digitalRead(ROTARY_A)+digitalRead(ROTARY_B)*2;
-    if(encInAlt != encIn){
-      encInAlt = encIn;
-      enc0 = enc1;
-      enc1 = enc2;
-      enc2 = encIn;
-      if((enc0 == 0)&&(enc1 == 1)&&(enc2 == 3)){
-        myMaxPull --;
-      }
-      if((enc0 == 3)&&(enc1 == 2)&&(enc2 == 0)){
-        myMaxPull --;
-      }
-      if((enc0 == 0)&&(enc1 == 2)&&(enc2 == 3)){
-        myMaxPull ++;
-      }
-      if((enc0 == 3)&&(enc1 == 1)&&(enc2 == 0)){
-        myMaxPull ++;
-      }
-      if(myMaxPull > 127){myMaxPull = 127;}
-      if(myMaxPull < 20){myMaxPull = 20;}
-      display_write_setup_pull(myMaxPull);
+
+    if(setupStep == 0){
+      varSet = myMaxPull + encValue;
+      sprintf(txtOut, "myMaxPull: %d encValue: %d", varSet, encValue);
+      Serial.println(txtOut);
+      if(varSet > 127){varSet = 127;}
+      if(varSet < 20){varSet = 20;}
+      display_write_setup_pull(varSet);
     }
+    else if(setupStep == 1){
+      varSet =  myID + encValue;
+      if(varSet > 15){varSet = 15;}
+      if(varSet < 0){varSet = 0;}
+      display_write_setup_id(varSet);
+    }
+      
+    
     delay(1);
     if(digitalRead(ROTARY_SW)==0){
-      sprintf(txtOut, "Max Pull set to: %d", myMaxPull);
-      Serial.println(txtOut);
-      setupActive = 0;
-      EEPROM.write(EEPROM_MAX_PULL, myMaxPull);
-      EEPROM.commit();
+      if(setupStep == 0){
+        Serial.println("Max Pull set to: " + varSet);
+        myMaxPull = varSet;
+        encValue = 0;
+        display_write_setup_id(myID);
+        setupStep = 1;
+        delay(800);
+      }
+      else if(setupStep == 1){
+        Serial.println("Device ID set to: " + myID);
+        setupActive = 0;
+        myID = varSet;
+        EEPROM.write(EEPROM_MAX_PULL, myMaxPull);
+        EEPROM.write(EEPROM_DEVICE_ID, myID);
+        EEPROM.commit();
+      }
     } 
   }
 }
@@ -509,6 +553,15 @@ void setup() {
   Serial.begin(115200);
   delay(100);
   
+  if(BAT_EN_AN >= 0){
+    pinMode(BAT_EN_AN, INPUT);
+  }
+  if(digitalRead(BAT_EN_AN)){
+    Serial.println("Bat EN High");
+  }
+  else{
+    Serial.println("Bat EN Low");
+  }
   // display init
   display.init();
   delay(10);
@@ -516,35 +569,34 @@ void setup() {
   Serial.println("Init Display");
   // Pin-Definition Rotary
   pinMode(ROTARY_SW, INPUT_PULLUP);
-  pinMode(ROTARY_A, INPUT_PULLUP);
-  pinMode(ROTARY_B, INPUT_PULLUP);
+  encoderInit();
 
   Serial.println("Init EEPROM");
   EEPROM.begin(EEPROM_SIZE);
   myMaxPull = EEPROM.read(EEPROM_MAX_PULL);
+  myID = EEPROM.read(EEPROM_DEVICE_ID);
+  if(myID > 0x0F) myID = 0x0F;
   Serial.print("Max Pull: ");
   Serial.println(myMaxPull);
-
-
-
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.setFont(ArialMT_Plain_10);
-  Serial.printf("Starting Transmitter \n");
-  display.drawString(0, 0, "Starting Transmitter");
-  display.display();
 
 
   if(digitalRead(ROTARY_SW)==0){
     setupMenue();
   }
+
+  display.clear();
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.setFont(ArialMT_Plain_10);
+  display.drawString(0, 0, "Starting ...");
+  display.setFont(ArialMT_Plain_24);  //10, 16, 24
+  display.drawString(0, 18, "Dev ID: " + String(myID));
+  display.setFont(ArialMT_Plain_16);  //10, 16, 24
+  display.drawString(0, 44, "max. pull: " + String(myMaxPull));
+  display.display();
+  delay(3000);
+
   //lora init
   loar_init();
-
-
-  //Serial.println(" Longpress Time: " + String(btnUp.getLongClickTime()) + "ms");
-  //Serial.println(" DoubleClick Time: " + String(btnUp.getDoubleClickTime()) + "ms");
-
   
   btnUp.setPressedHandler(btnPressed);
   btnUp.setLongClickTime(1000);
@@ -553,17 +605,9 @@ void setup() {
   btnDown.setPressedHandler(btnPressed);
   btnDown.setLongClickTime(500);
   btnDown.setLongClickDetectedHandler(btnLongClickDetected);
-  btnDown.setDoubleClickTime(400);
+  btnDown.setDoubleClickTime(700);
   btnDown.setDoubleClickHandler(btnDownDoubleClick);
   btnDown.setReleasedHandler(btnReleased);
-
-  
-
-  // display.clear();
-  // display.setTextAlignment(TEXT_ALIGN_LEFT);
-  // display.setFont(ArialMT_Plain_10);
-  // Serial.printf("Starting Transmitter \n");
-  // display.drawString(0, 0, "Starting Transmitter");
 
   // admin --> scan for existing transmitter for a few seconds --> start up with his current pull state
   if (myID == 0 ) {
@@ -577,8 +621,12 @@ void setup() {
       int counter_ms = 0;
       while (millis() < lastTxLoraMessageMillis + 4000) {
           // packet from transmitter
-          if (lora_read_packet) {
-            if (loraTxMessage.pullValue == loraTxMessage.pullValueBackup) {
+          Serial.println("Read Lora packet "+String(millis()));
+          if (lora_read_packet()) {
+            loraTxMessage.byte[0]= loraRxMessage.byte[0];
+            loraTxMessage.byte[1]= loraRxMessage.byte[1];
+            loraTxMessage.byte[2]= loraRxMessage.byte[2];
+            if (loraTxMessage.startframe == 0xCB) {
                 //found --> read state and exit
                 currentState = loraTxMessage.currentState;
                 targetPull = loraTxMessage.pullValue;
@@ -587,17 +635,16 @@ void setup() {
                 lastTxLoraMessageMillis = millis() - 4000;
             }
           } 
-          delay(10);
-          counter_ms += 10;
-          if(counter_ms == 1000){
+          Serial.println("After read Lora packet "+String(millis()));
+          if(millis()-lastTxLoraMessageMillis >= 3000){
             display.clear();
             display.setTextAlignment(TEXT_ALIGN_LEFT);
             display.setFont(ArialMT_Plain_16);
-            display.drawString(0, 0, "Searching 3s for");
+            display.drawString(0, 0, "Searching 1s for");
             display.drawString(0, 14, "existing transmitter...");
             display.display();
           }
-          else if(counter_ms == 2000){
+          else if(millis()-lastTxLoraMessageMillis >= 2000){
             display.clear();
             display.setTextAlignment(TEXT_ALIGN_LEFT);
             display.setFont(ArialMT_Plain_16);
@@ -605,11 +652,11 @@ void setup() {
             display.drawString(0, 14, "existing transmitter...");
             display.display();
           }
-          else if(counter_ms == 3000){
+          else if(millis()-lastTxLoraMessageMillis >= 1000){
             display.clear();
             display.setTextAlignment(TEXT_ALIGN_LEFT);
             display.setFont(ArialMT_Plain_16);
-            display.drawString(0, 0, "Searching 1s for");
+            display.drawString(0, 0, "Searching 3s for");
             display.drawString(0, 14, "existing transmitter...");
             display.display();
           }
@@ -622,9 +669,7 @@ void setup() {
    loraTxMessage.id = myID;
    Serial.print("Lora TX ID: --> ");
    Serial.println(myID);
-  
 }
-
 
 unsigned int now;
 
@@ -660,23 +705,13 @@ void loop() {
             display.drawString(0, 0, loraTxMessage.id + String("-B: ") + vescBattery + "%, T: " + vescTempMotor + " C");        
         } 
         else {
-          if(BAT_EN_AN >= 0){
-            digitalWrite(BAT_EN_AN, 1);
-            delay(2);
-            display.drawString(0, 0, loraTxMessage.id + String("-T: ") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");     
-            digitalWrite(BAT_EN_AN, 0);  
-          }
-          else{
-            display.drawString(0, 0, loraTxMessage.id + String("-T: ") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");     
-          }
-            
+            display.drawString(0, 0, loraTxMessage.id + String("-T: ") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");
         }
         display.setFont(ArialMT_Plain_24);  //10, 16, 24
         display.drawString(0, 14, String(currentState) + String(" (") + targetPull + "/" + currentPull + String("kg)"));
         display.drawString(0, 36, String(loraRxMessage.tachometer * 10) + "m| " + String(loraRxMessage.dutyCycleNow) + "%" );
         display.display();
-      }
-      
+      } 
     
         // state machine
         // -2 = hard brake -1 = soft brake, 0 = no pull / no brake, 1 = default pull (2kg), 2 = pre pull, 3 = take off pull, 4 = full pull, 5 = extra strong pull
@@ -715,6 +750,7 @@ void loop() {
           if (millis() > lastTxLoraMessageMillis + 300 || stateChanged) {
             
               stateChanged = false;
+              loraTxMessage.startframe = 0xCB;
               if(buttonFlags == 0x03){
                 loraTxMessage.currentState = -7;
                 Serial.println("Cut the line !!!");
@@ -740,6 +776,7 @@ void loop() {
           //if(0){
       
           if(lora_read_packet()){
+            if(loraRxMessage.startframe == 0xBC){
               currentPull = loraRxMessage.pullValue;
               // vescBatteryPercentage and vescTempMotor are alternated on lora link to reduce packet size
                 if (loraRxMessage.vescBatteryOrTempMotor == 1){
@@ -752,8 +789,8 @@ void loop() {
 
               Serial.printf("Value received: %d, RSSI: %d: , SNR: %d \n", loraRxMessage.pullValue, rssi, snr);
               Serial.printf("tacho: %d, dutty: %d: \n", loraRxMessage.tachometer * 10, loraRxMessage.dutyCycleNow);
+            }
         }
-
           
   //      checkButtons();
           btnUp.loop();
