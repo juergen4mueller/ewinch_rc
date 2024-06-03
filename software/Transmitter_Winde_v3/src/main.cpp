@@ -29,6 +29,26 @@ static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 #include "Battery18650Stats.h"
 #include <rom/rtc.h>
 #include <EEPROM.h>
+#include <WiFi.h>
+#include <esp_now.h>
+
+uint8_t espnowTarget[]={0x7C, 0xDF, 0xA1, 0xED, 0x63, 0x18};
+
+typedef struct struct_message {
+  int state;
+  int kgSoll;
+  int kgIst;
+  int lineLength;
+  bool cut;
+  bool timeout;
+} t_RC_Winch;
+
+t_RC_Winch rcWinch;
+esp_now_peer_info_t peerInfo;
+void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  Serial.print("\r\nLast Packet Send Status:\t");
+  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
+}
 
 #define BUILD_TYPE_MH_ET_ESP32 1 
 #define BUILD_TYPE_HELTEC_V3   2 // with LoraRf Lib -> Not running actually
@@ -224,20 +244,20 @@ unsigned long loraErrorMillis = 0;
   }
 
   bool lora_send_packet(void){ // on SX126x 
-  Serial.print("Lora send packet: ");
+  //Serial.print("Lora send packet: ");
     //if (Lora.wait()) {
     if(1){
       Lora.beginPacket();
       Lora.write((uint8_t*)&loraTxMessage.byte, sizeof(loraTxMessage.byte));
       for(int x=0;x<sizeof(loraTxMessage.byte);x++){
         sprintf(txtOut, "0x%X ", loraTxMessage.byte[x]);
-        Serial.print(txtOut);
+   //     Serial.print(txtOut);
       }
       //Serial.print(loraTxMessage.byte[0], sizeof(loraTxMessage.byte));
       Lora.write(3);
       Lora.endPacket();
       //Lora.wait();
-      Serial.println(" :success!");
+    //  Serial.println(" :success!");
       return 1;
     } 
     else{
@@ -246,7 +266,7 @@ unsigned long loraErrorMillis = 0;
     }
   }
   bool lora_read_packet(void){
-    Serial.println("Lora read packet");
+   // Serial.println("Lora read packet");
     Lora.request(); // switch to RX mode
     //Lora.wait(); // wait up to 250ms for incomming message
     if (Lora.available() >= sizeof(loraRxMessage.byte) ) {
@@ -553,6 +573,26 @@ void setup() {
   Serial.begin(115200);
   delay(100);
   
+
+  // Init ESP-NOW
+  WiFi.mode(WIFI_STA);
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error initializing ESP-NOW");
+    return;
+  }
+
+  //Register peer
+  memcpy(peerInfo.peer_addr, espnowTarget, 6);
+  peerInfo.channel = 0;
+  peerInfo.encrypt = false;
+
+  //Add peer
+  if (esp_now_add_peer(&peerInfo) != ESP_OK){
+    Serial.println("Failed to add peer");
+    return;
+  }
+
+
   if(BAT_EN_AN >= 0){
     pinMode(BAT_EN_AN, INPUT);
   }
@@ -679,8 +719,9 @@ void loop() {
     if(now > nextMainTaskMillis){
       nextMainTaskMillis = now+100;
       loopStep++;
-
+      rcWinch.timeout = false;
       if (millis() > lastRxLoraMessageMillis + 1500 ) {
+        rcWinch.timeout = true;
             //TODO acustic information
             //TODO  red disply
             display.clear(); // wieder einkommentieren, damit das Display flackert wenn die Verbindung verloren geht
@@ -711,6 +752,12 @@ void loop() {
         display.drawString(0, 14, String(currentState) + String(" (") + targetPull + "/" + currentPull + String("kg)"));
         display.drawString(0, 36, String(loraRxMessage.tachometer * 10) + "m| " + String(loraRxMessage.dutyCycleNow) + "%" );
         display.display();
+
+        rcWinch.state = currentState;
+        rcWinch.kgSoll = targetPull;
+        rcWinch.kgIst = currentPull;
+        rcWinch.lineLength = loraRxMessage.tachometer*10;
+        esp_err_t result = esp_now_send(espnowTarget, (uint8_t *) &rcWinch, sizeof(rcWinch));
       } 
     
         // state machine
@@ -754,15 +801,17 @@ void loop() {
               if(buttonFlags == 0x03){
                 loraTxMessage.currentState = -7;
                 Serial.println("Cut the line !!!");
+                rcWinch.cut = true;
               }
               else{
                 loraTxMessage.currentState = currentState;
+                rcWinch.cut = false;
               }
               loraTxMessage.pullValue = targetPull;
               loraTxMessage.pullValueBackup = targetPull;
               
               if (lora_send_packet()) {
-                Serial.printf("sending value %d: \n", targetPull);
+               // Serial.printf("sending value %d: \n", targetPull);
                 lastTxLoraMessageMillis = millis();  
               } 
               else {
@@ -787,8 +836,8 @@ void loop() {
               previousRxLoraMessageMillis = lastRxLoraMessageMillis;  // remember time of previous paket
               lastRxLoraMessageMillis = millis();
 
-              Serial.printf("Value received: %d, RSSI: %d: , SNR: %d \n", loraRxMessage.pullValue, rssi, snr);
-              Serial.printf("tacho: %d, dutty: %d: \n", loraRxMessage.tachometer * 10, loraRxMessage.dutyCycleNow);
+          //    Serial.printf("Value received: %d, RSSI: %d: , SNR: %d \n", loraRxMessage.pullValue, rssi, snr);
+          //    Serial.printf("tacho: %d, dutty: %d: \n", loraRxMessage.tachometer * 10, loraRxMessage.dutyCycleNow);
             }
         }
           
