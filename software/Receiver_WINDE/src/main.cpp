@@ -315,8 +315,9 @@ void loop() {
                 delay(10);
                 loraRxMessage.startframe = 0xBC;
                 loraRxMessage.pullValue = currentPull;
-                loraRxMessage.tachometer = abs(vescUART.data.tachometer)/1000;     // %100 --> in m, %10 --> to use only one byte for up to 2550m line lenght
+                loraRxMessage.tachometer = abs(vescUART.data.tachometer)/725;     // %100 --> in m, %10 --> to use only one byte for up to 2550m line lenght
                 loraRxMessage.dutyCycleNow = abs(vescUART.data.dutyCycleNow * 100);     //in %
+                //Serial.printf("Tacho: %d\r\n", vescUART.data.tachometer);
                 // alternate vescBatteryPercentage and vescTempMotor value on lora link to reduce packet size
                 if (loraRxMessage.vescBatteryOrTempMotor == 0){
                   loraRxMessage.vescBatteryOrTempMotor = 1;
@@ -473,6 +474,7 @@ void loop() {
         encValue = 0;
       } else{
         pullByUart(encValue);
+        // Serial.printf("Pull value: %d\r\n", encValue);
       }
       // Turn on warning light if in pull mode
       if(currentState > 0){
@@ -512,8 +514,12 @@ void loop() {
           //measuredVescVal.tachometer = 0;
           Serial.println("Failed to get data from VESC!");
         }
+         
+     if(digitalRead(ROTARY_SW)==0){
+      encValue = 0;
+     }
 
-        sprintf(txtOut,"Rotary pull: %d", encValue);
+        // sprintf(txtOut,"Rotary pull: %d", encValue);
         Serial.println(txtOut);
       }
 }

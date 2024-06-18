@@ -14,6 +14,10 @@
 		{
 			"name": "Receiver_WINDE",
 			"path": "../../../../../OneDrive-Persönlich/_Projekte/ewinch_rc_jm/software/Receiver_WINDE"
+		},
+		{
+			"name": "Transmitter_Winde_v3-test",
+			"path": "."
 		}
 	],
 	"settings": {}

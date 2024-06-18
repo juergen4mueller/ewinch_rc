@@ -11,86 +11,23 @@
 
 #include <TFT_eSPI.h>
 #include <Battery18650Stats.h>
-
 #include <Wire.h>
-#include <SensorQMI8658.hpp>
+#include "QMI8658.h"
 
 #define ADC_PIN 1
 
-// QMI8658 Pins
-#define SENSOR_SDA 6
-#define SENSOR_SCL 7
-#define USE_WIRE
-#define SENSOR_IRQ  -1
-
-SensorQMI8658 qmi;
-
-
-IMUdata acc[128];
-IMUdata gyr[128];
+float acc[3], gyro[3];
 
 void gyro_sensor_start(void){
-  //Using WIRE !!
-  if (!qmi.begin(Wire, QMI8658_L_SLAVE_ADDRESS, SENSOR_SDA, SENSOR_SCL)) {
-      Serial.println("Failed to find QMI8658 - check your wiring!");
-      while (1) {
-          delay(1000);
-      }
-  }
-    /* Get chip id*/
-    Serial.print("Device ID:");
-    Serial.println(qmi.getChipID(), HEX);
-
-
-    qmi.configAccelerometer(
-        SensorQMI8658::ACC_RANGE_4G,
-        SensorQMI8658::ACC_ODR_1000Hz,
-        SensorQMI8658::LPF_MODE_0,
-        true);
-
-
-    qmi.configGyroscope(
-        SensorQMI8658::GYR_RANGE_64DPS,
-        SensorQMI8658::GYR_ODR_896_8Hz,
-        SensorQMI8658::LPF_MODE_3,
-        true);
-
-    qmi.configFIFO(
-        SensorQMI8658::FIFO_MODE_FIFO,
-        SensorQMI8658::FIFO_SAMPLES_16,
-        SensorQMI8658::IntPin1,
-        8);
-
-    // In 6DOF mode (accelerometer and gyroscope are both enabled),
-    // the output data rate is derived from the nature frequency of gyroscope
-    qmi.enableGyroscope();
-    qmi.enableAccelerometer();
-
-    // Print register configuration information
-    qmi.dumpCtrlRegister();
-
+  // QMI8658_init();
+  // Serial.println("QMI8658_init\r\n");
 }
 
 void gyro_sensor_read(void){
-   if (!qmi.readFromFifo(acc, 128, gyr, 128)) {
-        return;
-    }
-    for (int i = 0; i < 16; ++i) {
-        Serial.print("ACCEL: ");
-        Serial.print("X:");
-        Serial.print(acc[i].x);
-        Serial.print(" Y:");
-        Serial.print(acc[i].y);
-        Serial.print(" Z:");
-        Serial.println(acc[i].z);
-        Serial.print("GYRO: ");
-        Serial.print(" X:");
-        Serial.print(gyr[i].x);
-        Serial.print(" Y:");
-        Serial.print(gyr[i].y );
-        Serial.print(" Z:");
-        Serial.println(gyr[i].z);
-    }
+  // float acc[3], gyro[3];
+  // unsigned int tim_count = 0;
+  // QMI8658_read_xyz(acc, gyro, &tim_count);
+  // Serial.printf("ACC: x: %.1f y: %.1f z: %.1f", acc[0], acc[1], acc[2]);
 }
 
 Battery18650Stats battery(ADC_PIN, 2.4875);
@@ -220,7 +157,7 @@ void setup(){
   
 
   pinMode(LCD_BL_PIN, OUTPUT);
-  digitalWrite(LCD_BL_PIN, 1);
+  digitalWrite(LCD_BL_PIN, 0);
 
   Serial.begin(115200);
 
@@ -281,6 +218,7 @@ void setup(){
     ui_init();
 
 
+    digitalWrite(LCD_BL_PIN, 1);
 
 
   Serial.println( "Setup done" );
