@@ -1,0 +1,20 @@
+{
+	"folders": [
+		{
+			"path": ".."
+		},
+		{
+			"name": "Receiver_WINDE",
+			"path": "../../../../../../../../OneDrive/_Programmieren/PlatformIO/Projects/Receiver_WINDE"
+		},
+		{
+			"name": "Monitor_Winde",
+			"path": "../../../../../../../../OneDrive/_Programmieren/PlatformIO/Projects/Monitor_Winde"
+		},
+		{
+			"name": "ESP32_Dev_Test",
+			"path": "../../../../../../../../OneDrive/_Programmieren/PlatformIO/Projects/ESP32_Dev_Test"
+		}
+	],
+	"settings": {}
+}
