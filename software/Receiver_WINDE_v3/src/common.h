@@ -24,7 +24,8 @@ typedef union{
    uint8_t startframe;           // 0xBC --> from Base to ControlUnit
    int8_t pullValue;           // currently active pull value,  -127 - 0 --> 5 brake, 0 - 127 --> pull
    uint8_t tachometer;          // *10 --> in meter
-   uint8_t dutyCycleNow;
+   uint8_t dutyCycleOrWindDirection:1;
+   uint8_t dutyCycleOrWindDirektionValue:7;
    uint8_t vescBatteryOrTempMotor : 1 ;  // 0 ==> vescTempMotor , 1 ==> vescBatteryPercentage
    uint8_t vescBatteryOrTempMotorValue  : 7 ;   //0 - 127
    };

@@ -47,6 +47,7 @@ typedef struct struct_message {
   int kgSoll;
   int kgIst;
   int lineLength;
+  int windDirection;
   bool cut;
   bool timeout;
 } t_RC_Winch;
@@ -71,6 +72,7 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 #define EEPROM_SIZE 20
 #define EEPROM_DEVICE_ID 0
 #define EEPROM_MAX_PULL  1
+#define EEPROM_DEF_PULL  2 // Default-Pull einstellbar machen
 
 int rssi = 0;
 float snr = 0;
@@ -404,6 +406,16 @@ void display_write_setup_id(int devId){
   display.display();
 }
 
+void display_write_setup_defaultPull(int defPull){
+  display.clear();
+  display.setTextAlignment(TEXT_ALIGN_LEFT);
+  display.setFont(ArialMT_Plain_16);
+  display.drawString(0, 0, "Setup Menu");
+  sprintf(txtOut, "Def. Pull: %d", defPull);
+  display.drawString(0, 18, txtOut);
+  display.display();
+}
+
 
 void setupMenue(void){
   myMaxPull = EEPROM.read(EEPROM_MAX_PULL);
@@ -427,6 +439,12 @@ void setupMenue(void){
       display_write_setup_pull(varSet);
     }
     else if(setupStep == 1){
+      varSet =  defaultPull + encValue;
+      if(varSet > 15){varSet = 15;}
+      if(varSet < 7){varSet = 7;}
+      display_write_setup_defaultPull(varSet);
+    }
+    else if(setupStep == 2){
       varSet =  myID + encValue;
       if(varSet > 15){varSet = 15;}
       if(varSet < 0){varSet = 0;}
@@ -440,15 +458,24 @@ void setupMenue(void){
         Serial.println("Max Pull set to: " + varSet);
         myMaxPull = varSet;
         encValue = 0;
-        display_write_setup_id(myID);
+        display_write_setup_defaultPull(defaultPull);
         setupStep = 1;
         delay(800);
       }
       else if(setupStep == 1){
+        Serial.println("Def Pull set to: " + varSet);
+        defaultPull = varSet;
+        encValue = 0;
+        display_write_setup_id(myID);
+        setupStep = 2;
+        delay(800);
+      }
+      else if(setupStep == 2){
         Serial.println("Device ID set to: " + myID);
         setupActive = 0;
         myID = varSet;
         EEPROM.write(EEPROM_MAX_PULL, myMaxPull);
+        EEPROM.write(EEPROM_DEF_PULL, defaultPull);
         EEPROM.write(EEPROM_DEVICE_ID, myID);
         EEPROM.commit();
       }
@@ -518,8 +545,13 @@ void setup() {
 
   Serial.println("Init EEPROM");
   EEPROM.begin(EEPROM_SIZE);
+
+  defaultPull = EEPROM.read(EEPROM_DEF_PULL);
+  if(defaultPull < 7) defaultPull = 7;
+  if(defaultPull > 15) defaultPull = 15;
   myMaxPull = EEPROM.read(EEPROM_MAX_PULL);
   myID = EEPROM.read(EEPROM_DEVICE_ID);
+
   if(myID > 0x0F) myID = 0x0F;
   Serial.print("Max Pull: ");
   Serial.println(myMaxPull);
@@ -536,7 +568,7 @@ void setup() {
   display.setFont(ArialMT_Plain_24);  //10, 16, 24
   display.drawString(0, 18, "Dev ID: " + String(myID));
   display.setFont(ArialMT_Plain_16);  //10, 16, 24
-  display.drawString(0, 44, "max. pull: " + String(myMaxPull));
+  display.drawString(0, 44, "pull: " + String(defaultPull)+" - "+ String(myMaxPull));
   display.display();
   delay(3000);
 
@@ -619,7 +651,8 @@ void setup() {
 }
 
 unsigned int now;
-
+uint8_t dutyCycle;
+uint8_t windDirection;
 void loop() {
 
     now = millis();
@@ -657,13 +690,15 @@ void loop() {
         }
         display.setFont(ArialMT_Plain_24);  //10, 16, 24
         display.drawString(0, 14, String(currentState) + String(" (") + targetPull + "/" + currentPull + String("kg)"));
-        display.drawString(0, 36, String(loraRxMessage.tachometer * 10) + "m| " + String(loraRxMessage.dutyCycleNow) + "%" );
+
+        display.drawString(0, 36, String(loraRxMessage.tachometer * 10) + "m| " + String(dutyCycle) + "%" );
         display.display();
 
         rcWinch.state = currentState;
         rcWinch.kgSoll = targetPull;
         rcWinch.kgIst = currentPull;
         rcWinch.lineLength = loraRxMessage.tachometer*10;
+        rcWinch.windDirection = windDirection * 10;
         #ifdef USE_ESPNOW
         esp_err_t result = esp_now_send(espnowTarget, (uint8_t *) &rcWinch, sizeof(rcWinch));
         #endif
@@ -686,9 +721,11 @@ void loop() {
               break;
             case 2: 
               targetPull = myMaxPull * prePullScale / 100;
+              if(targetPull < defaultPull){targetPull = defaultPull;}
               break;
             case 3:
               targetPull = myMaxPull * takeOffPullScale / 100;
+              if(targetPull < defaultPull){targetPull = defaultPull;}
               break;
             case 4:
               targetPull = myMaxPull * fullPullScale / 100;
@@ -727,11 +764,18 @@ void loop() {
                   digitalWrite(LED_ONBOARD, 1);
                   currentPull = loraRxMessage.pullValue;
                   // vescBatteryPercentage and vescTempMotor are alternated on lora link to reduce packet size
-                    if (loraRxMessage.vescBatteryOrTempMotor == 1){
-                      vescBattery = loraRxMessage.vescBatteryOrTempMotorValue;
-                    } else {
-                      vescTempMotor = loraRxMessage.vescBatteryOrTempMotorValue;
-                    }
+                  if(loraRxMessage.dutyCycleOrWindDirection == 1){
+                    windDirection = loraRxMessage.dutyCycleOrWindDirektionValue;
+                  }
+                  else{
+                    dutyCycle = loraRxMessage.dutyCycleOrWindDirektionValue;
+                  }
+
+                  if (loraRxMessage.vescBatteryOrTempMotor == 1){
+                    vescBattery = loraRxMessage.vescBatteryOrTempMotorValue;
+                  } else {
+                    vescTempMotor = loraRxMessage.vescBatteryOrTempMotorValue;
+                  }
                   previousRxLoraMessageMillis = lastRxLoraMessageMillis;  // remember time of previous paket
                   lastRxLoraMessageMillis = millis();
 

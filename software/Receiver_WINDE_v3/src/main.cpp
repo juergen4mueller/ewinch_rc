@@ -49,13 +49,6 @@ LoraRxMessage loraRxMsg;
 #if BUILD_TYPE == BUILD_TYPE_MH_ET_ESP32
   #warning "Now compiling for MH-ET-ESP32"
   #include <LoRa.h>
-  // Setup Lora neu
-  // #define LORA_SCK     18    // GPIO5  -- SX1278's SCK
-  // #define LORA_MISO    19   // GPIO19 -- SX1278's MISnO
-  // #define LORA_MOSI    23   // GPIO27 -- SX1278's MOSI
-  // #define LORA_SS       5   // GPIO18 -- SX1278's CS
-  // #define LORA_RST     17   // GPIO14 -- SX1278's RESET
-  // #define LORA_DI0     16   // GPIO26 -- SX1278's IRQ(Interrupt Request)
     // Setup Lora neu
     #define LORA_SCK     18    // GPIO5  -- SX1278's SCK
     #define LORA_MISO    19   // GPIO19 -- SX1278's MISnO
@@ -63,7 +56,6 @@ LoraRxMessage loraRxMsg;
     #define LORA_SS       5   // GPIO18 -- SX1278's CS
     #define LORA_RST     0   // GPIO14 -- SX1278's RESET
     #define LORA_DI0     2   // GPIO26 -- SX1278's IRQ(Interrupt Request)
-
 
 
   void lora_init(void){
@@ -125,20 +117,22 @@ LoraRxMessage loraRxMsg;
 
   // Define sonstiger Pins
   // LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
-    #define LED_GN 26 // up
+    #define Cutter_Out 26 // up
     #define LED_RT 27 // down
     // Pins Rotary Encoder -> Funktionen:
     // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
     #define ROTARY_SW 14
     #define ROTARY_A  32
     #define ROTARY_B  33
-
-    #define WARN_LIGHT_OUT 25
+    #define WARN_LIGHT_OUT 25 
     #define FAN_OUT   12
 
     #define OLED_SDA  21
     #define OLED_SCL  22
-    #define BAT_V_PIN  35
+
+    //Battery Voltage IO 35 -> Wind direction
+    #define WindInAnalog  35
+    #define LineCutter    
 
     #define VESC_RX  17    //connect to TX on Vesc
     #define VESC_TX  16    //connect to RX on Vesc
@@ -250,11 +244,6 @@ static int myMaxPull = 75;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 
 
 SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
-// battery measurement
-//#define CONV_FACTOR 1.7
-//#define READS 20
-Pangodream_18650_CL BL(BAT_V_PIN); // pin 34 old / 35 new v2.1 hw
-
 
 //Using VescUart librarie to read from Vesc (https://github.com/SolidGeek/VescUart/)
 // Uart old
@@ -349,69 +338,38 @@ void pullByUart(int current){
   }
 }
 
-// void pullManual(void){
-//   manPull = EEPROM.read(EEPROM_MAX_PULL);
-//   setupActive = 1;
-//   Serial.printf("Enter Setup Menu \n");
-//   display_write_setup_pull(myMaxPull);
-//   while(digitalRead(ROTARY_SW)==0);
-//   delay(400);
-//   while(setupActive){
-//     encIn = digitalRead(ROTARY_A)+digitalRead(ROTARY_B)*2;
-//     if(encInAlt != encIn){
-//       encInAlt = encIn;
-//       enc0 = enc1;
-//       enc1 = enc2;
-//       enc2 = encIn;
-//       if((enc0 == 0)&&(enc1 == 1)&&(enc2 == 3)){
-//         myMaxPull --;
-//       }
-//       if((enc0 == 3)&&(enc1 == 2)&&(enc2 == 0)){
-//         myMaxPull --;
-//       }
-//       if((enc0 == 0)&&(enc1 == 2)&&(enc2 == 3)){
-//         myMaxPull ++;
-//       }
-//       if((enc0 == 3)&&(enc1 == 1)&&(enc2 == 0)){
-//         myMaxPull ++;
-//       }
-//       if(myMaxPull > 127){myMaxPull = 127;}
-//       if(myMaxPull < 20){myMaxPull = 20;}
-//       display_write_setup_pull(myMaxPull);
-//     }
-//     delay(1);
-//     if(digitalRead(ROTARY_SW)==0){
-//       sprintf(txtOut, "Max Pull set to: %d", myMaxPull);
-//       Serial.println(txtOut);
-//       setupActive = 0;
-//       EEPROM.write(EEPROM_MAX_PULL, myMaxPull);
-//       EEPROM.commit();
-//     } 
-//   }
-// }
+#define WIND_VALUE_OFFSET 112
+uint8_t get_wind_direction(void){
+  // Wind direction from potentiometer value 0 ... 4096
+  // output 7 Bit max, value 0 ... 36 is direction with factor 10 degree
+  uint16_t anValue = analogRead(WindInAnalog);
+  if(anValue < WIND_VALUE_OFFSET){
+    anValue = 4095 - WIND_VALUE_OFFSET; 
+  }
+  else{
+    anValue -= WIND_VALUE_OFFSET;
+  }
+  anValue /= 112;
+  // Serial.print("AN Wind: ");
+  // Serial.println(anValue);
+  return anValue;
+}
 
 
 uint32_t nextSendTime;
 void setup() {
 
-  pinMode(LED_GN, OUTPUT);
-  digitalWrite(LED_GN, 1);
+  pinMode(Cutter_Out, OUTPUT);
+  digitalWrite(Cutter_Out, 0);
   pinMode(LED_RT, OUTPUT);
   digitalWrite(LED_RT, 1);
+  pinMode(WindInAnalog, ANALOG);
   Serial.begin(115200);
   encoderInit();
   //Setup UART port for Vesc communication
   Serial1.begin(115200, SERIAL_8N1, VESC_RX, VESC_TX);
   vescUART.setSerialPort(&Serial1);
-  //vescUART.setDebugPort(&Serial);
   
-  // //OLED display // nur über I2C, keine Reset-Leitung vorhanden
-  // pinMode(16,OUTPUT);
-  // pinMode(2,OUTPUT);
-  // digitalWrite(16, LOW);    // set GPIO16 low to reset OLED
-  // delay(50); 
-  // digitalWrite(16, HIGH); // while OLED is running, must set GPIO16 in high
-
   //lora init
   lora_init();
 
@@ -429,7 +387,6 @@ void setup() {
   Serial.printf("Starting Receiver \n");
   display.drawString(0, 0, "Starting Receiver");
   digitalWrite(LED_RT, 0);
-  digitalWrite(LED_GN, 0);
   nextSendTime = millis();
 }
 
@@ -448,8 +405,6 @@ void testLora(void){
   while(1){
 
     now = millis();
-    
-    // Serial.printf("%8d:last read\r\n", now - lastRead, counter_send++);
     
     if(lora_read_packet()){
 
@@ -474,29 +429,24 @@ void testLora(void){
         lastSend = now;
       }
     }
-    // if(now > nextSendTime){
-    //   // Serial.println("Not active");
-    //   // continue;
-
-
-    //   nextSendTime += SEND_CYCLE;
-    //   loraTxMsg.startframe = 0xBC;
-    //   loraTxMsg.tachometer = counter_send;
-    //   loraTxMsg.dutyCycleNow = counter_send>>8;
-    //   loraTxMsg.pullValue = counter_send%16; // als BZ
-    //   loraTxMsg.vescBatteryOrTempMotor = 0;
-    //   loraTxMsg.vescBatteryOrTempMotorValue = 0;
-    //   Serial.printf("%8d:Sent Radio packet nr: %5d\r\n", millis(), counter_send++);
-    //   lora_send_packet();
-    // }
   }
 
 }
-
+uint32_t nextTime = 0;
 void loop() {
  // testLora();
+
  loopStep++;
  // TODO activate rewinding winch mode here
+// while(1){
+//   now = millis();
+//   if(now >= nextTime){
+//     nextTime = now + 1000;
+//     get_wind_direction();
+//   }
+// }
+  
+
  if (true) {
     // screen
     
@@ -504,14 +454,18 @@ void loop() {
       display.clear();
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
-      display.drawString(0, 0, currentId + String("-RX: (") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");
+      //display.drawString(0, 0, currentId + String("-RX: (") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");
+      display.drawString(0, 0, currentId + String("-RX: (")+ rssi + "dBm, " + snr + ")");
       display.setFont(ArialMT_Plain_24);  //10, 16, 24
       if (currentState == -7){
           display.drawString(0, 11, "Cutting");  
+          digitalWrite(Cutter_Out, 1);
       }
       else if (currentState > 0){
+          digitalWrite(Cutter_Out, 0);
           display.drawString(0, 11, String("P ") + currentState + ": (" + currentPull + "kg)");  
       } else {
+          digitalWrite(Cutter_Out, 0);
           display.drawString(0, 11, String("B ") + currentState + ": (" + currentPull + "kg)");    
       }
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
@@ -547,9 +501,18 @@ void loop() {
               loraTxMsg.startframe = 0xBC;
               loraTxMsg.pullValue = currentPull;
               loraTxMsg.tachometer = abs(vescUART.data.tachometer)/725;     // %100 --> in m, %10 --> to use only one byte for up to 2550m line lenght
-              loraTxMsg.dutyCycleNow = abs(vescUART.data.dutyCycleNow * 100);     //in %
               //Serial.printf("Tacho: %d\r\n", vescUART.data.tachometer);
               // alternate vescBatteryPercentage and vescTempMotor value on lora link to reduce packet size
+              if(loraTxMsg.dutyCycleOrWindDirection == 0){
+                loraTxMsg.dutyCycleOrWindDirection = 1;
+                loraTxMsg.dutyCycleOrWindDirektionValue = abs(vescUART.data.dutyCycleNow * 100);     //in %
+              }
+              else{ // Wind direction max value = 127, real 360 degree
+                    // direction will be transmitted by faktor 10, 0...36 
+                loraTxMsg.dutyCycleOrWindDirection = 1;
+                loraTxMsg.dutyCycleOrWindDirektionValue = get_wind_direction();
+              }
+             
               if (loraTxMsg.vescBatteryOrTempMotor == 0){
                 loraTxMsg.vescBatteryOrTempMotor = 1;
                 loraTxMsg.vescBatteryOrTempMotorValue = vescBattery;
@@ -560,7 +523,6 @@ void loop() {
               digitalWrite(LED_RT, 0);
               
               // Sende Paket nach empfang von Remote  
-              digitalWrite(LED_GN, 1);
               // Hier noch die Daten reinpacken
               if (lora_send_packet()) {
                 Serial.printf("sending pull value %d: \r\n", targetPullValue);
@@ -568,8 +530,7 @@ void loop() {
               } 
               else {
                 Serial.println("Lora send busy");
-              }
-              digitalWrite(LED_GN, 0);              
+              }          
         }
       }
     }
@@ -722,15 +683,6 @@ void loop() {
             digitalWrite(FAN_OUT, 0);
           }
 
-            //SerialPrint(measuredVescVal, &DEBUGSERIAL);
-            /*
-            Serial.println(vescUART.data.tachometer);
-            Serial.println(vescUART.data.inpVoltage);
-            Serial.println(vescUART.data.dutyCycleNow);            
-            Serial.println(vescUART.data.tempMotor);
-            Serial.println(vescUART.data.tempMosfet);
-            vescUART.printVescValues();
-            */
         } else
         {
           //TODO send notification to lora
