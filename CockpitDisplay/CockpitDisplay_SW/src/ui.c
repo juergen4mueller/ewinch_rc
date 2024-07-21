@@ -28,7 +28,9 @@ lv_obj_t *ui_lblForceSoll;
 lv_obj_t *ui_PanelFtar1;
 lv_obj_t *ui_lblFist;
 lv_obj_t *ui_lblForceIst;
+lv_obj_t *ui_ImageWindDir;
 lv_obj_t *ui____initial_actions0;
+const lv_img_dsc_t *ui_imgset_windpfeil_[1] = {&ui_img_windpfeil_2_png};
 
 ///////////////////// TEST LVGL SETTINGS ////////////////////
 #if LV_COLOR_DEPTH != 16

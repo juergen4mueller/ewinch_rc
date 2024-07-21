@@ -9,6 +9,7 @@ void ui_ScreenTow_screen_init(void)
 {
 ui_ScreenTow = lv_obj_create(NULL);
 lv_obj_clear_flag( ui_ScreenTow, LV_OBJ_FLAG_SCROLLABLE );    /// Flags
+//lv_obj_set_style_bg_img_src( ui_ScreenTow, &TemporaryImage, LV_PART_MAIN | LV_STATE_DEFAULT );
 
 ui_arcBatt = lv_arc_create(ui_ScreenTow);
 lv_obj_set_width( ui_arcBatt, 240);
@@ -218,5 +219,14 @@ lv_obj_set_style_text_align(ui_lblForceIst, LV_TEXT_ALIGN_RIGHT, LV_PART_MAIN| L
 lv_obj_set_style_text_font(ui_lblForceIst, &lv_font_montserrat_48, LV_PART_MAIN| LV_STATE_DEFAULT);
 lv_obj_set_style_bg_color(ui_lblForceIst, lv_color_hex(0x000000), LV_PART_MAIN | LV_STATE_DEFAULT );
 lv_obj_set_style_bg_opa(ui_lblForceIst, 0, LV_PART_MAIN| LV_STATE_DEFAULT);
+
+ui_ImageWindDir = lv_img_create(ui_ScreenTow);
+lv_img_set_src(ui_ImageWindDir, &ui_img_windpfeil_2_png);
+lv_obj_set_width( ui_ImageWindDir, LV_SIZE_CONTENT);  /// 1
+lv_obj_set_height( ui_ImageWindDir, LV_SIZE_CONTENT);   /// 1
+lv_obj_set_align( ui_ImageWindDir, LV_ALIGN_CENTER );
+lv_obj_add_flag( ui_ImageWindDir, LV_OBJ_FLAG_ADV_HITTEST );   /// Flags
+lv_obj_clear_flag( ui_ImageWindDir, LV_OBJ_FLAG_SCROLLABLE );    /// Flags
+lv_img_set_angle(ui_ImageWindDir,1800);
 
 }

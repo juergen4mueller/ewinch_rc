@@ -43,8 +43,10 @@ extern lv_obj_t *ui_lblForceSoll;
 extern lv_obj_t *ui_PanelFtar1;
 extern lv_obj_t *ui_lblFist;
 extern lv_obj_t *ui_lblForceIst;
+extern lv_obj_t *ui_ImageWindDir;
 extern lv_obj_t *ui____initial_actions0;
 
+LV_IMG_DECLARE( ui_img_windpfeil_2_png);   // assets/WindPfeil_2.png
 
 
 
