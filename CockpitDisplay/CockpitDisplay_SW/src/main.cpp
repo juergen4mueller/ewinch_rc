@@ -11,8 +11,6 @@
 
 #include <TFT_eSPI.h>
 #include <Battery18650Stats.h>
-#include <Wire.h>
-#include "QMI8658.h"
 
 #define ADC_PIN 1
 
@@ -42,6 +40,7 @@ typedef struct struct_message {
   int kgSoll;
   int kgIst;
   int lineLength;
+  int windDirection;
   bool cut;
   bool timeout;
 } t_RC_Winch;
@@ -145,6 +144,7 @@ void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
   else{
     lv_obj_set_style_text_color(ui_lblLine, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT );
   }
+  lv_img_set_angle(ui_ImageWindDir,rcWinch.windDirection*10);
 }
 
 
