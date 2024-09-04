@@ -15,7 +15,12 @@ Default VESC app config is vesc_app_config.xml
  Moved software project to PLATFORMIO using VSCode for convenience work.
 
 ## Software improvements:
- - rotary encoder in transmitter to adjust "max. weight" (push while switch on, then select and push to confirm)
+ - rotary encoder in transmitter to adjust max. weight, default pull and transmitter id (push while switch on, then select and push to confirm)
  - EEPROM function in transmitter to hold last "max. weight" value.
  - rotary encoder in receiver used to pull manually (adjust force by turning, push stops immediately)
+
+## work in progress
+ - wind direction from winch transmitting to cockpit display
+ - warning lamp if pull mode active
+ - cutting system
 
