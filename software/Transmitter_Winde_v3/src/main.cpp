@@ -528,12 +528,10 @@ void setup() {
   if(BAT_EN_AN >= 0){
     pinMode(BAT_EN_AN, INPUT);
   }
-  if(digitalRead(BAT_EN_AN)){
-    Serial.println("Bat EN High");
-  }
-  else{
-    Serial.println("Bat EN Low");
-  }
+  
+    digitalWrite(BAT_EN_AN, 1);
+    int BattLevel = BL.getBatteryChargeLevel();
+    digitalWrite(BAT_EN_AN, 0);
   // display init
   display.init();
   delay(10);
@@ -565,6 +563,8 @@ void setup() {
   display.setTextAlignment(TEXT_ALIGN_LEFT);
   display.setFont(ArialMT_Plain_10);
   display.drawString(0, 0, "Starting ...");
+  display.setFont(ArialMT_Plain_16);  //10, 16, 24
+  display.drawString(64, 0,"B:"+ String(BattLevel)+"%");
   display.setFont(ArialMT_Plain_24);  //10, 16, 24
   display.drawString(0, 18, "Dev ID: " + String(myID));
   display.setFont(ArialMT_Plain_16);  //10, 16, 24
@@ -686,7 +686,9 @@ void loop() {
             display.drawString(0, 0, loraTxMessage.id + String("-B: ") + vescBattery + "%, T: " + vescTempMotor + " C");        
         } 
         else {
+          digitalWrite(BAT_EN_AN, 1);
             display.drawString(0, 0, loraTxMessage.id + String("-T: ") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");
+          digitalWrite(BAT_EN_AN, 0);
         }
         display.setFont(ArialMT_Plain_24);  //10, 16, 24
         display.drawString(0, 14, String(currentState) + String(" (") + targetPull + "/" + currentPull + String("kg)"));

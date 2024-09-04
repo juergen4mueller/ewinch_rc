@@ -649,6 +649,10 @@ void loop() {
                           //  20 = 1557
                           // 90  = 1847 // max. für Solo
                           // 127 = 2000 // max. für Tandem
+      // PWM to current:
+      // PWM range from 1.480 to 2.000
+      // 520 mV for pull range 0 ... 310 A
+      // 90 kg -> 0x372 V -> 222 A 
       pwmWriteTimeValue = (currentPull + 127) * (PWM_TIME_100 - PWM_TIME_0) / 254 + PWM_TIME_0;   
       // pulseOut ist eine Soft-PWM, HardPWM auch möglich?   
       pulseOut(PWM_PIN_OUT, pwmWriteTimeValue);
