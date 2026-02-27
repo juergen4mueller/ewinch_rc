@@ -19,6 +19,11 @@
 #include <Button2.h>
 #include <VescUart.h>
 #include "common.h"
+#include <EEPROM.h>
+
+
+#define EEPROM_SIZE 20
+#define EEPROM_STARTUP_COUNTER 0
 
 #define LORA_FREQ  866500000
 #define LORA_BW  125000 // kHz
@@ -27,8 +32,9 @@
 #define LORA_SPREADFACTOR 9  // 125ms trmt
 // #define LORA_SPREADFACTOR 10 // 250ms trmt
 
-#define BUILD_TYPE_MH_ET_ESP32 1 
-#define BUILD_TYPE_SX1272_RL   2
+#define BUILD_TYPE_MH_ET_ESP32        1 
+#define BUILD_TYPE_HELTEC_RL          2
+#define BUILD_TYPE_HELTEC_V2_SX1276   3
 
 #ifndef BUILD_TYPE
 #error "Must define BUILD_TYPE..."
@@ -42,20 +48,23 @@ int rssi = 0;
 float snr = 0;
 
 char txtOut[40];
-
+char serialIn[20];
+int serialInBufferPos;
+int serialReceiverWaiting;
 LoraTxMessage loraTxMsg;
 LoraRxMessage loraRxMsg;
+
 
 #if BUILD_TYPE == BUILD_TYPE_MH_ET_ESP32
   #warning "Now compiling for MH-ET-ESP32"
   #include <LoRa.h>
     // Setup Lora neu
-    #define LORA_SCK     18    // GPIO5  -- SX1278's SCK
-    #define LORA_MISO    19   // GPIO19 -- SX1278's MISnO
-    #define LORA_MOSI    23   // GPIO27 -- SX1278's MOSI
-    #define LORA_SS       5   // GPIO18 -- SX1278's CS
-    #define LORA_RST     0   // GPIO14 -- SX1278's RESET
-    #define LORA_DI0     2   // GPIO26 -- SX1278's IRQ(Interrupt Request)
+    #define LORA_SCK     18    // GPIO5  -- SX1276's SCK
+    #define LORA_MISO    19   // GPIO19 -- SX1276's MISnO
+    #define LORA_MOSI    23   // GPIO27 -- SX1276's MOSI
+    #define LORA_SS       5   // GPIO18 -- SX1276's CS
+    #define LORA_RST     0   // GPIO14 -- SX1276's RESET
+    #define LORA_DI0     2   // GPIO26 -- SX1276's IRQ(Interrupt Request)
 
 
   void lora_init(void){
@@ -139,43 +148,128 @@ LoraRxMessage loraRxMsg;
 
     #define PWM_PIN_OUT  13 //Define Digital PIN
   
-#elif BUILD_TYPE == BUILD_TYPE_SX1272_RL
+  
+#elif BUILD_TYPE == BUILD_TYPE_HELTEC_V2_SX1276
+#warning "Now compiling for Heltec V2 with SX1276"
+#include <LoRa.h>
+  // Setup Lora neu
+  #define LORA_SCK     5    // GPIO5  -- SX1276's SCK
+  #define LORA_MISO    19   // GPIO19 -- SX1276's MISnO
+  #define LORA_MOSI    27   // GPIO27 -- SX1276's MOSI
+  #define LORA_SS      18   // GPIO18 -- SX1276's CS
+  #define LORA_RST     14  // GPIO14 -- SX1276's RESET
+  #define LORA_DI0     26  // GPIO26 -- SX1276's IRQ(Interrupt Request)
+  #define LORA_DI1     35  // GPIO26 -- SX1276's IRQ(Interrupt Request)
+  #define LORA_DI2     34  // GPIO26 -- SX1276's IRQ(Interrupt Request)
+
+
+void lora_init(void){
+  Serial.println("Start SPI");
+  SPI.begin(LORA_SCK,LORA_MISO,LORA_MOSI,LORA_SS);
+  LoRa.setPins(LORA_SS,LORA_RST,LORA_DI0);
+  if (!LoRa.begin(LORA_FREQ)) {   //EU: 868E6 US: 915E6
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+  LoRa.setTxPower(20, PA_OUTPUT_PA_BOOST_PIN);
+  LoRa.enableCrc();
+  LoRa.setSignalBandwidth(LORA_BW);   //signalBandwidth - signal bandwidth in Hz, defaults to 125E3. Supported values are 7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, and 500E3.
+  LoRa.setSpreadingFactor(LORA_SPREADFACTOR);   // default is 7, 6 - 12
+  }
+
+bool lora_send_packet(void){
+  if (LoRa.beginPacket()) { 
+    // returns 1 wenn sender nicht belegt ist
+    // mit beginPacket(1) wird der impilcitHandler ausgewählt, hier also explicit
+    // REG_FIFO_ADDR_PTR und REG_PAYLOAD_LENGTH werden auf 0 gesetzt
+    //Serial.print("Send Lora pack");
+    LoRa.write((uint8_t*)&loraTxMsg, sizeof(loraTxMsg.byte));
+    //returns size of packet
+    // Payload length ermitteln
+
+    LoRa.endPacket();
+    // wenn 1 übergeben wird gewartet 
+    // auf TX-;Mode umschalten
+    // warten bis TX beendet 
+
+    return 1;
+  } 
+  else{
+    return 0;
+  }
+}
+bool lora_read_packet(void){
+  if (LoRa.parsePacket() >= sizeof(loraRxMsg.byte) ) {
+    // int LoRaClass::parsePacket(int size) size > 0 ? implicit Header : explicitHeader
+    // adjust for explHeader
+    // set FIFO addr to current RX addr
+    // put module to standby
+    // put module in single rx and long range mode
+    LoRa.readBytes((uint8_t *)&loraRxMsg, sizeof(loraRxMsg.byte));
+    // liest die daten aus dem FIFO
+    rssi = LoRa.packetRssi();
+    snr = LoRa.packetSnr();
+ //   sprintf(txtOut, "RecLoraPacket: 0x%X 0x%X 0x%X 0x%X", loraRxMsg.byte[0], loraRxMsg.byte[1], loraRxMsg.byte[2], loraRxMsg.byte[3]);
+  //  Serial.println(txtOut);
+    return 1;
+
+  }
+  else{
+    return 0;
+  }
+}
+
+
+// Define sonstiger Pins
+
+  #define OLED_SDA   4
+  #define OLED_SCL  15
+  #define OLED_RST  16
+
+  #define VESC_RX  22    //connect to TX on Vesc
+  #define VESC_TX  23    //connect to RX on Vesc
+
+  #define PWM_PIN_OUT  25 //Define Digital PIN
+
+// LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
+  #define Cutter_Out 33
+  #define WARN_LIGHT_OUT 12
+  #define FAN_OUT   32
+
+  //IO 37 -> Wind direction
+  #define WindInAnalog  37
+
+  #define LED_RT 27 // down
+  // Pins Rotary Encoder -> Funktionen:
+  // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
+  #define ROTARY_SW 0
+  #define ROTARY_A  2
+  #define ROTARY_B  17
+
+
+
+
+  #elif BUILD_TYPE == BUILD_TYPE_HELTEC_RL
   #warning "Now compiling for Heltec with RadioLib"
   #include <RadioLib.h>
 
-
+  #define LED_ONBOARD 35
   // Setup Lora neu
-  #define LORA_SCK      18    // GPIO5  -- SX1278's SCK
-  #define LORA_MISO    19   // GPIO19 -- SX1278's MISnOv
-  #define LORA_MOSI    23   // GPIO27 -- SX1278's MOSI
-  #define LORA_SS       5  // GPIO18 -- SX1278's CS
-  #define LORA_RST     0   // GPIO14 -- SX1278's RESET
-  // #define LORA_BUSY    13  // only on Heltec Module connected
-  #define LORA_DI0     2   // GPIO26 -- SX1278's IRQ(Interrupt Request)
+  #define LORA_SCK      9    // GPIO5  -- SX1276's SCK
+  #define LORA_MISO    11   // GPIO19 -- SX1276's MISnO
+  #define LORA_MOSI    10   // GPIO27 -- SX1276's MOSI
+  #define LORA_SS       8   // GPIO18 -- SX1276's CS
+  #define LORA_RST     12   // GPIO14 -- SX1276's RESET
+  #define LORA_BUSY    13  // only on Heltec Module connected
+  #define LORA_DI0     14   // GPIO26 -- SX1276's IRQ(Interrupt Request)
 
-  SX1278 LoRa = new Module(LORA_SS, LORA_DI0, LORA_RST, )
+  SX1262 Lora = new Module(LORA_SS, LORA_DI0, LORA_RST, LORA_BUSY);
   int radioTransmissionState = RADIOLIB_ERR_NONE;
   void lora_init(void){
     Serial.println("Start SPI");
     SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
 
-    int state = LoRa.begin( LORA_FREQ/1000000.0, 125.0, 7, 7, 0x12, 20, 8, 1.6, false);
-    /*
-
-    
-    
-int16_t SX1262::begin(
-      float freq,               -> 868 MHz
-      float bw,                 -> 125 kHz
-      uint8_t sf,               -> 7
-      uint8_t cr,               -> 7
-      uint8_t syncWord,         -> 0x12 
-      int8_t power,             -> 20
-      uint16_t preambleLength,  -> 8 
-      float tcxoVoltage,        -> 1.6
-      bool useRegulatorLDO      -> false
-      ) 
-    */
+    int state = Lora.begin( 866.5, 125.0, 9, 7, 0x12, 20, 8, 1.6, false);
     
     if (state != RADIOLIB_ERR_NONE){
       Serial.println("Something wrong, can't begin LoRa radio");
@@ -187,7 +281,7 @@ int16_t SX1262::begin(
   }
 
   bool lora_send_packet(void){ // on SX126x 
-    radioTransmissionState = LoRa.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
+    radioTransmissionState = Lora.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
     if(radioTransmissionState == RADIOLIB_ERR_NONE){
       return 1;
     }
@@ -197,11 +291,13 @@ int16_t SX1262::begin(
   }
 
   bool lora_read_packet(void){
-    int recState = LoRa.receive(loraRxMsg.byte, sizeof(loraTxMsg.byte));
+    int recState = Lora.receive(loraRxMsg.byte, 5);
     if(recState == RADIOLIB_ERR_NONE){
+      digitalWrite(LED_ONBOARD, 1);
       delay(2);
-      rssi = LoRa.getRSSI();
-      snr = LoRa.getSNR();
+      rssi = Lora.getRSSI();
+      snr = Lora.getSNR();
+      digitalWrite(LED_ONBOARD, 0);
       return 1;
     }
     else{
@@ -209,28 +305,43 @@ int16_t SX1262::begin(
     }
     
   }
+  // Pins Rotary Encoder
+
+  #define ROTARY_SW  2
+  #define ROTARY_A   3
+  #define ROTARY_B   4
+
+  // Buttons for state machine control
+  #define BUTTON_UP    5 // up
+  #define BUTTON_DOWN  6 // down
+
+  // Pins OLED oisplay
+
+  #define OLED_SDA  17
+  #define OLED_SCL  18
+  #define OLED_RST  21 // only in Heltec mode used
+
+  // No battery used in receiver
+  #define BAT_AN_IN  1
+  #define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
 
   // Define sonstiger Pins
   // LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
-    #define LED_GN 26 // up
-    #define LED_RT 27 // down
-    // Pins Rotary Encoder -> Funktionen:
-    // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
-    #define ROTARY_SW 14
-    #define ROTARY_A  32
-    #define ROTARY_B  33
+  //Battery Voltage IO 7 -> Wind direction
+  #define WindInAnalog  7
 
-    #define WARN_LIGHT_OUT 25
-    #define FAN_OUT   12
+  #define VESC_RX  38    //connect to TX on Vesc
+  #define VESC_TX  39    //connect to RX on Vesc
 
-    #define OLED_SDA  21
-    #define OLED_SCL  22
-    #define BAT_V_PIN  35
+  #define Cutter_Out 40 // up
+  #define LED_RT 41 // down
+  // Pins Rotary Encoder -> Funktionen:
+  // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
 
-    #define VESC_RX  17    //connect to TX on Vesc
-    #define VESC_TX  16    //connect to RX on Vesc
+  #define WARN_LIGHT_OUT 42 
+  #define FAN_OUT   45
 
-    #define PWM_PIN_OUT  13 //Define Digital PIN
+  #define PWM_PIN_OUT  46 //Define Digital PIN
 
 #endif
 
@@ -354,17 +465,39 @@ uint8_t get_wind_direction(void){
   // Serial.println(anValue);
   return anValue;
 }
-
+uint8_t startupCounter = 0;
 
 uint32_t nextSendTime;
-void setup() {
+#define BOOT_Pin 0
+uint8_t bootPinIn, bootPinInAlt;
 
+void setup() {
+  EEPROM.begin(EEPROM_SIZE);
+  startupCounter = EEPROM.read(EEPROM_STARTUP_COUNTER)+1;
+  EEPROM.write(EEPROM_STARTUP_COUNTER, startupCounter);
+  EEPROM.commit();
+#if BUILD_TYPE == BUILD_TYPE_HELTEC_RL
+  pinMode(LED_ONBOARD, OUTPUT);
+  digitalWrite(LED_ONBOARD, 0);
+#endif
+  #ifdef OLED_RST
+    delay(10);
+    pinMode(OLED_RST, OUTPUT);
+    digitalWrite(OLED_RST, 1);
+    delay(40);
+    digitalWrite(OLED_RST, 0);
+    delay(40);
+    digitalWrite(OLED_RST, 1);
+  #endif
+
+  pinMode(BOOT_Pin, INPUT_PULLUP);
   pinMode(Cutter_Out, OUTPUT);
   digitalWrite(Cutter_Out, 0);
   pinMode(LED_RT, OUTPUT);
   digitalWrite(LED_RT, 1);
   pinMode(WindInAnalog, ANALOG);
   Serial.begin(115200);
+
   encoderInit();
   //Setup UART port for Vesc communication
   Serial1.begin(115200, SERIAL_8N1, VESC_RX, VESC_TX);
@@ -388,6 +521,10 @@ void setup() {
   display.drawString(0, 0, "Starting Receiver");
   digitalWrite(LED_RT, 0);
   nextSendTime = millis();
+
+  Serial.print("Startup number ");
+  Serial.print(startupCounter);
+  Serial.println(" done.");
 }
 
 uint32_t sendCycle =0;
@@ -450,7 +587,7 @@ void loop() {
  if (true) {
     // screen
     
-    if (loopStep % 10 == 0) {
+    if (loopStep % 2 == 0) { // Display aktualisieren
       display.clear();
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
@@ -470,12 +607,12 @@ void loop() {
       }
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
       //display.drawString(0, 36, String("Error / Uptime{min}: ") + loraErrorCount + " / " + millis()/60000);
-      display.drawString(0, 36, String("B: ") + vescBattery + "%, M: " + vescTempMotor + "C" +" R"+encValue); 
+      display.drawString(0, 36, String("B: ") + vescBattery + "%, M: " + vescTempMotor + "C" +" R"+encValue + " UP "+startupCounter); 
       display.drawString(0, 48, String("Last TX / RX: ") + lastTxLoraMessageMillis/100 + " / " + lastRxLoraMessageMillis/100);
       display.display();
     }
     
-    if(lora_read_packet()){
+    if(lora_read_packet()){ // Lora Frame lesen
           if(loraRxMsg.startframe == 0xCB){          
             Serial.print("Data from Lora: ");
             Serial.printf("ID: %d State: %d PullValue: %d", loraRxMsg.id, loraRxMsg.currentState, loraRxMsg.pullValue);    
@@ -591,6 +728,7 @@ void loop() {
       
  }  // end rewind winch mode
 
+ 
 
       // auto line stop
       // (smouth to avoid line issues on main winch with rewinding winch)
@@ -675,7 +813,7 @@ void loop() {
 
       
       //read actual Vesc values from uart
-      if (loopStep % 20 == 0) {
+      if (loopStep % 10 == 0) {
         if (vescUART.getVescValues()) {
           vescBattery = CapCheckPerc(vescUART.data.inpVoltage, numberOfCells);    // vesc battery in %
           vescTempMotor = vescUART.data.tempMotor;                                // motor temp in C   
@@ -691,7 +829,7 @@ void loop() {
         {
           //TODO send notification to lora
           //measuredVescVal.tachometer = 0;
-          Serial.println("Failed to get data from VESC!");
+          // Serial.println("Failed to get data from VESC!");
         }
          
      if(digitalRead(ROTARY_SW)==0){
@@ -699,6 +837,36 @@ void loop() {
      }
 
         // sprintf(txtOut,"Rotary pull: %d", encValue);
-        Serial.println(txtOut);
+        //Serial.println(txtOut);
+      }
+
+      bootPinIn = digitalRead(BOOT_Pin);
+      if((bootPinIn==0)&&(bootPinInAlt != 0)){
+        Serial.println("Boot Switch !!!");
+      }
+      bootPinInAlt = bootPinIn;
+
+      char rcChar; 
+      if(Serial.available()){
+        
+        Serial.read(&rcChar, 1);
+        Serial.printf("Got char %c ", rcChar);
+        if(rcChar == 'r'){
+          serialInBufferPos = 0;
+          serialIn[serialInBufferPos++] =rcChar; 
+          serialReceiverWaiting = 1;
+        }
+        else if(serialReceiverWaiting){
+          serialIn[serialInBufferPos++] =rcChar; 
+        }
+        if(serialInBufferPos >= 3){
+          serialReceiverWaiting = 0;
+          serialIn[3]= 0;
+          if(strcmp("rst", serialIn)==0){
+            Serial.println("got reset command!");
+            EEPROM.write(EEPROM_STARTUP_COUNTER, 0);
+            EEPROM.commit();
+          }
+        }
       }
 }

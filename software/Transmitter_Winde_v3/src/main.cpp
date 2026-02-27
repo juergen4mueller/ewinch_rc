@@ -31,6 +31,18 @@ static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 #include <EEPROM.h>
 #include <WiFi.h>
 
+#define LORA_FREQ  866500000
+#define LORA_BW  125000 // kHz
+// #define LORA_SPREADFACTOR 7  // 36ms trmt
+// #define LORA_SPREADFACTOR 8  // 72ms trmt
+#define LORA_SPREADFACTOR 9  // 125ms trmt
+// #define LORA_SPREADFACTOR 10 // 250ms trmt
+
+LoraTxMessage loraTxMsg;
+LoraRxMessage loraRxMsg;
+
+#define POWER_DOWN_DELAY 120000UL
+uint32_t powerDownTime;
 
 #define USE_ESPNOW
 
@@ -62,8 +74,9 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 #endif
 
 
-#define BUILD_TYPE_MH_ET_ESP32 1 
-#define BUILD_TYPE_HELTEC_RL   3
+#define BUILD_TYPE_MH_ET_ESP32      1 
+#define BUILD_TYPE_HELTEC_V2_SX1276 2
+#define BUILD_TYPE_HELTEC_RL        3
 
 #ifndef BUILD_TYPE
 #error "Must define BUILD_TYPE..."
@@ -113,7 +126,100 @@ unsigned long loraErrorMillis = 0;
 
 #define LORA_BAND  868E6
 
-#if BUILD_TYPE == BUILD_TYPE_MH_ET_ESP32
+#if BUILD_TYPE == BUILD_TYPE_HELTEC_V2_SX1276
+  #warning "Now compiling for Heltec V2 SX1276"
+#include <LoRa.h>
+  // Setup Lora neu
+  #define LORA_SCK     5    // GPIO5  -- SX1276's SCK
+  #define LORA_MISO    19   // GPIO19 -- SX1276's MISnO
+  #define LORA_MOSI    27   // GPIO27 -- SX1276's MOSI
+  #define LORA_SS      18   // GPIO18 -- SX1276's CS
+  #define LORA_RST     14  // GPIO14 -- SX1276's RESET
+  #define LORA_DI0     26  // GPIO26 -- SX1276's IRQ(Interrupt Request)
+  #define LORA_DI1     35  // GPIO26 -- SX1276's IRQ(Interrupt Request)
+  #define LORA_DI2     34  // GPIO26 -- SX1276's IRQ(Interrupt Request)
+
+
+void lora_init(void){
+  Serial.println("Start SPI");
+  SPI.begin(LORA_SCK,LORA_MISO,LORA_MOSI,LORA_SS);
+  LoRa.setPins(LORA_SS,LORA_RST,LORA_DI0);
+  if (!LoRa.begin(LORA_FREQ)) {   //EU: 868E6 US: 915E6
+    Serial.println("Starting LoRa failed!");
+    while (1);
+  }
+  LoRa.setTxPower(20, PA_OUTPUT_PA_BOOST_PIN);
+  LoRa.enableCrc();
+  LoRa.setSignalBandwidth(LORA_BW);   //signalBandwidth - signal bandwidth in Hz, defaults to 125E3. Supported values are 7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, and 500E3.
+  LoRa.setSpreadingFactor(LORA_SPREADFACTOR);   // default is 7, 6 - 12
+  }
+
+bool lora_send_packet(void){
+  if (LoRa.beginPacket()) { 
+    // returns 1 wenn sender nicht belegt ist
+    // mit beginPacket(1) wird der impilcitHandler ausgewählt, hier also explicit
+    // REG_FIFO_ADDR_PTR und REG_PAYLOAD_LENGTH werden auf 0 gesetzt
+    //Serial.print("Send Lora pack");
+    LoRa.write((uint8_t*)&loraTxMsg, sizeof(loraTxMsg.byte));
+    //returns size of packet
+    // Payload length ermitteln
+
+    LoRa.endPacket();
+    // wenn 1 übergeben wird gewartet 
+    // auf TX-;Mode umschalten
+    // warten bis TX beendet 
+
+    return 1;
+  } 
+  else{
+    return 0;
+  }
+}
+bool lora_read_packet(void){
+  if (LoRa.parsePacket() >= sizeof(loraRxMsg.byte) ) {
+    // int LoRaClass::parsePacket(int size) size > 0 ? implicit Header : explicitHeader
+    // adjust for explHeader
+    // set FIFO addr to current RX addr
+    // put module to standby
+    // put module in single rx and long range mode
+    LoRa.readBytes((uint8_t *)&loraRxMsg, sizeof(loraRxMsg.byte));
+    // liest die daten aus dem FIFO
+    rssi = LoRa.packetRssi();
+    snr = LoRa.packetSnr();
+ //   sprintf(txtOut, "RecLoraPacket: 0x%X 0x%X 0x%X 0x%X", loraRxMsg.byte[0], loraRxMsg.byte[1], loraRxMsg.byte[2], loraRxMsg.byte[3]);
+  //  Serial.println(txtOut);
+    return 1;
+
+  }
+  else{
+    return 0;
+  }
+}
+
+
+// Define sonstiger Pins
+
+  #define OLED_SDA   4
+  #define OLED_SCL  15
+  #define OLED_RST  16
+
+  // Pins Rotary Encoder
+
+  #define ROTARY_SW 0
+  #define ROTARY_A  2
+  #define ROTARY_B  17
+  #define LED_ONBOARD 25
+
+  #define BAT_AN_IN 36
+  #define BAT_EN_AN -1
+  Battery18650Stats BL(BAT_AN_IN, 1.7); 
+
+  // Buttons for state machine control
+  #define BUTTON_UP   32 // up
+  #define BUTTON_DOWN 33 // down
+
+
+  #elif BUILD_TYPE == BUILD_TYPE_MH_ET_ESP32
   #warning "Now compiling for MH-ET-ESP32"
   #include <LoRa.h>
   // Setup Lora neu
@@ -124,7 +230,7 @@ unsigned long loraErrorMillis = 0;
   #define LORA_RST     17   // GPIO14 -- SX1278's RESET
   #define LORA_DI0     16   // GPIO26 -- SX1278's IRQ(Interrupt Request)
 
-  void loar_init(void){
+  void lora_init(void){
     Serial.println("Start SPI");
     SPI.begin(SCK,MISO,MOSI,SS);
     LoRa.setPins(LORA_SS,LORA_RST,LORA_DI0);
@@ -196,6 +302,7 @@ unsigned long loraErrorMillis = 0;
   #define BUTTON_DOWN 27 // down
 
 
+
 #elif BUILD_TYPE == BUILD_TYPE_HELTEC_RL
   #warning "Now compiling for Heltec with RadioLib"
   #include <RadioLib.h>
@@ -212,7 +319,8 @@ unsigned long loraErrorMillis = 0;
 
   SX1262 Lora = new Module(LORA_SS, LORA_DI0, LORA_RST, LORA_BUSY);
   int radioTransmissionState = RADIOLIB_ERR_NONE;
-  void loar_init(void){
+
+  void lora_init(void){
     Serial.println("Start SPI");
     SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
 
@@ -488,7 +596,34 @@ void set_lora_rx_flag(void){
   lora_rx_flag = 1;
 }
 
+
+bool led_shutdownState;
+void power_manager(void){
+  // Shutdown eingebaut damit beim Laden der Transmitter nicht die ganze Zeit Lora Band belegt wird.
+  // Hilft dem Laderegler das Ende des Ladevorgangs zuverlässig zu erkennen
+  uint32_t now = millis();
+  uint32_t remainingTime = (powerDownTime - now)/1000;
+  if(remainingTime < 100){
+    if(remainingTime % 2){
+      digitalWrite(LED_ONBOARD, 1);
+    }
+    else{
+      digitalWrite(LED_ONBOARD, 0);
+    }
+  }
+  if(now > powerDownTime){
+    display.clear();
+    digitalWrite(LED_ONBOARD, 0);
+    delay(100);
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    esp_deep_sleep_start();
+  }
+
+}
+
+
 void setup() {
+  powerDownTime = POWER_DOWN_DELAY;
   pinMode(LED_ONBOARD, OUTPUT);
   digitalWrite(LED_ONBOARD, 1);
   #ifdef OLED_RST
@@ -573,7 +708,7 @@ void setup() {
   delay(3000);
 
   //lora init
-  loar_init();
+  lora_init();
   
   btnUp.setPressedHandler(btnPressed);
   btnUp.setLongClickTime(1000);
@@ -646,8 +781,9 @@ void setup() {
    loraTxMessage.id = myID;
    Serial.print("Lora TX ID: --> ");
    Serial.println(myID);
-
-   Lora.setPacketReceivedAction(set_lora_rx_flag);
+// #if BUILD_TYPE == BUILD_TYPE_HELTEC_RL
+//    Lora.setPacketReceivedAction(set_lora_rx_flag);
+// #endif
 }
 
 unsigned int now;
@@ -757,11 +893,13 @@ void loop() {
               }
               loraTxMessage.pullValue = targetPull;
               loraTxMessage.pullValueBackup = targetPull;
-              if(lora_rx_flag){
-                lora_rx_flag = 0;
-                Lora.readData(loraRxMessage.byte, sizeof(loraRxMessage.byte));
-                rssi = Lora.getRSSI();
-                snr = Lora.getSNR();
+              
+              // if(lora_rx_flag){
+              //   lora_rx_flag = 0;
+              //   Lora.readData(loraRxMessage.byte, sizeof(loraRxMessage.byte));
+              if(lora_read_packet()){
+                // rssi = LoRa.getRSSI();
+                // snr = Lora.getSNR();
                 if(loraRxMessage.startframe == 0xBC){
                   digitalWrite(LED_ONBOARD, 1);
                   currentPull = loraRxMessage.pullValue;
@@ -780,6 +918,7 @@ void loop() {
                   }
                   previousRxLoraMessageMillis = lastRxLoraMessageMillis;  // remember time of previous paket
                   lastRxLoraMessageMillis = millis();
+                  powerDownTime = lastRxLoraMessageMillis + POWER_DOWN_DELAY;
 
                   // Serial.printf("Value received: %d, RSSI: %d: , SNR: %d \n", loraRxMessage.pullValue, rssi, snr);
                 //  Serial.printf("tacho: %d, dutty: %d: \n", loraRxMessage.tachometer * 10, loraRxMessage.dutyCycleNow);
@@ -787,7 +926,7 @@ void loop() {
                 digitalWrite(LED_ONBOARD, 0);
               }
               if (lora_send_packet()) {
-                Lora.startReceive();
+                //Lora.startReceive();
                 // Serial.printf("sending value %d: \n", targetPull);
                 lastTxLoraMessageMillis = millis();  
               } 
@@ -796,7 +935,7 @@ void loop() {
               }
             
           }
-
+        power_manager();
     }
   //      checkButtons();
   btnUp.loop();
