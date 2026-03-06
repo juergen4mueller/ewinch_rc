@@ -1,20 +1,3 @@
 {
-	"folders": [
-		{
-			"path": "../MHetMiniESP32"
-		},
-		{
-			"name": "230621-184738-mhetesp32devkit",
-			"path": "../../../../../../../OneDrive/_Programmieren/PlatformIO/Projects/230621-184738-mhetesp32devkit"
-		},
-		{
-			"name": "Transmitter_Winde_v3",
-			"path": "../../../../../OneDrive-Persönlich/_Projekte/ewinch_rc_jm/software/Transmitter_Winde_v3"
-		},
-		{
-			"name": "Receiver_WINDE",
-			"path": "../../../../../OneDrive-Persönlich/_Projekte/ewinch_rc_jm/software/Receiver_WINDE"
-		}
-	],
-	"settings": {}
+    "folders": []
 }

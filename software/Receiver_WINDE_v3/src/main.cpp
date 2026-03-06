@@ -1,12 +1,13 @@
-#include <Arduino.h>
-/*
- * receiver
- * receives target pull value from lora link
- * sends acknowlegement on lora with current parameters
- * writes target pull with PWM signal to vesc
- * reads current parameters (tachometer, battery %, motor temp) with UART from vesc, based on (https://github.com/SolidGeek/VescUart/)
- * 
- */
+// #include <Arduino.h>
+// #include <RadioLib.h>
+// /*
+//  * receiver
+//  * receives target pull value from lora link
+//  * sends acknowlegement on lora with current parameters
+//  * writes target pull with PWM signal to vesc
+//  * reads current parameters (tachometer, battery %, motor temp) with UART from vesc, based on (https://github.com/SolidGeek/VescUart/)
+//  * 
+//  */
 
 
 #include "LiPoCheck.h"    //to calculate battery % based on cell Voltage
@@ -25,848 +26,729 @@
 #define EEPROM_SIZE 20
 #define EEPROM_STARTUP_COUNTER 0
 
-#define LORA_FREQ  866500000
-#define LORA_BW  125000 // kHz
-// #define LORA_SPREADFACTOR 7  // 36ms trmt
-// #define LORA_SPREADFACTOR 8  // 72ms trmt
-#define LORA_SPREADFACTOR 9  // 125ms trmt
-// #define LORA_SPREADFACTOR 10 // 250ms trmt
-
-#define BUILD_TYPE_MH_ET_ESP32        1 
-#define BUILD_TYPE_HELTEC_RL          2
-#define BUILD_TYPE_HELTEC_V2_SX1276   3
-
-#ifndef BUILD_TYPE
-#error "Must define BUILD_TYPE..."
-#endif
 
 #define EEPROM_SIZE 20
 #define EEPROM_DEVICE_ID 0
 #define EEPROM_MAX_PULL  1
 
-int rssi = 0;
-float snr = 0;
+// int rssi = 0;
+// float snr = 0;
 
-char txtOut[40];
-char serialIn[20];
-int serialInBufferPos;
-int serialReceiverWaiting;
-LoraTxMessage loraTxMsg;
-LoraRxMessage loraRxMsg;
-
-
-#if BUILD_TYPE == BUILD_TYPE_MH_ET_ESP32
-  #warning "Now compiling for MH-ET-ESP32"
-  #include <LoRa.h>
-    // Setup Lora neu
-    #define LORA_SCK     18    // GPIO5  -- SX1276's SCK
-    #define LORA_MISO    19   // GPIO19 -- SX1276's MISnO
-    #define LORA_MOSI    23   // GPIO27 -- SX1276's MOSI
-    #define LORA_SS       5   // GPIO18 -- SX1276's CS
-    #define LORA_RST     0   // GPIO14 -- SX1276's RESET
-    #define LORA_DI0     2   // GPIO26 -- SX1276's IRQ(Interrupt Request)
-
-
-  void lora_init(void){
-    Serial.println("Start SPI");
-    SPI.begin(SCK,MISO,MOSI,SS);
-    LoRa.setPins(LORA_SS,LORA_RST,LORA_DI0);
-    if (!LoRa.begin(LORA_FREQ)) {   //EU: 868E6 US: 915E6
-      Serial.println("Starting LoRa failed!");
-      while (1);
-    }
-    LoRa.setTxPower(20, PA_OUTPUT_PA_BOOST_PIN);
-    LoRa.enableCrc();
-    LoRa.setSignalBandwidth(LORA_BW);   //signalBandwidth - signal bandwidth in Hz, defaults to 125E3. Supported values are 7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, and 500E3.
-    LoRa.setSpreadingFactor(LORA_SPREADFACTOR);   // default is 7, 6 - 12
-    }
-
-  bool lora_send_packet(void){
-    if (LoRa.beginPacket()) { 
-      // returns 1 wenn sender nicht belegt ist
-      // mit beginPacket(1) wird der impilcitHandler ausgewählt, hier also explicit
-      // REG_FIFO_ADDR_PTR und REG_PAYLOAD_LENGTH werden auf 0 gesetzt
-      //Serial.print("Send Lora pack");
-      LoRa.write((uint8_t*)&loraTxMsg, sizeof(loraTxMsg.byte));
-      //returns size of packet
-      // Payload length ermitteln
-
-      LoRa.endPacket();
-      // wenn 1 übergeben wird gewartet 
-      // auf TX-;Mode umschalten
-      // warten bis TX beendet 
-
-      return 1;
-    } 
-    else{
-      return 0;
-    }
-  }
-  bool lora_read_packet(void){
-    if (LoRa.parsePacket() >= sizeof(loraRxMsg.byte) ) {
-      // int LoRaClass::parsePacket(int size) size > 0 ? implicit Header : explicitHeader
-      // adjust for explHeader
-      // set FIFO addr to current RX addr
-      // put module to standby
-      // put module in single rx and long range mode
-      LoRa.readBytes((uint8_t *)&loraRxMsg, sizeof(loraRxMsg.byte));
-      // liest die daten aus dem FIFO
-      rssi = LoRa.packetRssi();
-      snr = LoRa.packetSnr();
-   //   sprintf(txtOut, "RecLoraPacket: 0x%X 0x%X 0x%X 0x%X", loraRxMsg.byte[0], loraRxMsg.byte[1], loraRxMsg.byte[2], loraRxMsg.byte[3]);
-    //  Serial.println(txtOut);
-      return 1;
-
-    }
-    else{
-      return 0;
-    }
-  }
-
-
-  // Define sonstiger Pins
-  // LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
-    #define Cutter_Out 26 // up
-    #define LED_RT 27 // down
-    // Pins Rotary Encoder -> Funktionen:
-    // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
-    #define ROTARY_SW 14
-    #define ROTARY_A  32
-    #define ROTARY_B  33
-    #define WARN_LIGHT_OUT 25 
-    #define FAN_OUT   12
-
-    #define OLED_SDA  21
-    #define OLED_SCL  22
-
-    //Battery Voltage IO 35 -> Wind direction
-    #define WindInAnalog  35
-    #define LineCutter    
-
-    #define VESC_RX  17    //connect to TX on Vesc
-    #define VESC_TX  16    //connect to RX on Vesc
-
-    #define PWM_PIN_OUT  13 //Define Digital PIN
-  
-  
-#elif BUILD_TYPE == BUILD_TYPE_HELTEC_V2_SX1276
-#warning "Now compiling for Heltec V2 with SX1276"
-#include <LoRa.h>
-  // Setup Lora neu
-  #define LORA_SCK     5    // GPIO5  -- SX1276's SCK
-  #define LORA_MISO    19   // GPIO19 -- SX1276's MISnO
-  #define LORA_MOSI    27   // GPIO27 -- SX1276's MOSI
-  #define LORA_SS      18   // GPIO18 -- SX1276's CS
-  #define LORA_RST     14  // GPIO14 -- SX1276's RESET
-  #define LORA_DI0     26  // GPIO26 -- SX1276's IRQ(Interrupt Request)
-  #define LORA_DI1     35  // GPIO26 -- SX1276's IRQ(Interrupt Request)
-  #define LORA_DI2     34  // GPIO26 -- SX1276's IRQ(Interrupt Request)
-
-
-void lora_init(void){
-  Serial.println("Start SPI");
-  SPI.begin(LORA_SCK,LORA_MISO,LORA_MOSI,LORA_SS);
-  LoRa.setPins(LORA_SS,LORA_RST,LORA_DI0);
-  if (!LoRa.begin(LORA_FREQ)) {   //EU: 868E6 US: 915E6
-    Serial.println("Starting LoRa failed!");
-    while (1);
-  }
-  LoRa.setTxPower(20, PA_OUTPUT_PA_BOOST_PIN);
-  LoRa.enableCrc();
-  LoRa.setSignalBandwidth(LORA_BW);   //signalBandwidth - signal bandwidth in Hz, defaults to 125E3. Supported values are 7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, and 500E3.
-  LoRa.setSpreadingFactor(LORA_SPREADFACTOR);   // default is 7, 6 - 12
-  }
-
-bool lora_send_packet(void){
-  if (LoRa.beginPacket()) { 
-    // returns 1 wenn sender nicht belegt ist
-    // mit beginPacket(1) wird der impilcitHandler ausgewählt, hier also explicit
-    // REG_FIFO_ADDR_PTR und REG_PAYLOAD_LENGTH werden auf 0 gesetzt
-    //Serial.print("Send Lora pack");
-    LoRa.write((uint8_t*)&loraTxMsg, sizeof(loraTxMsg.byte));
-    //returns size of packet
-    // Payload length ermitteln
-
-    LoRa.endPacket();
-    // wenn 1 übergeben wird gewartet 
-    // auf TX-;Mode umschalten
-    // warten bis TX beendet 
-
-    return 1;
-  } 
-  else{
-    return 0;
-  }
-}
-bool lora_read_packet(void){
-  if (LoRa.parsePacket() >= sizeof(loraRxMsg.byte) ) {
-    // int LoRaClass::parsePacket(int size) size > 0 ? implicit Header : explicitHeader
-    // adjust for explHeader
-    // set FIFO addr to current RX addr
-    // put module to standby
-    // put module in single rx and long range mode
-    LoRa.readBytes((uint8_t *)&loraRxMsg, sizeof(loraRxMsg.byte));
-    // liest die daten aus dem FIFO
-    rssi = LoRa.packetRssi();
-    snr = LoRa.packetSnr();
- //   sprintf(txtOut, "RecLoraPacket: 0x%X 0x%X 0x%X 0x%X", loraRxMsg.byte[0], loraRxMsg.byte[1], loraRxMsg.byte[2], loraRxMsg.byte[3]);
-  //  Serial.println(txtOut);
-    return 1;
-
-  }
-  else{
-    return 0;
-  }
-}
-
-
-// Define sonstiger Pins
-
-  #define OLED_SDA   4
-  #define OLED_SCL  15
-  #define OLED_RST  16
-
-  #define VESC_RX  22    //connect to TX on Vesc
-  #define VESC_TX  23    //connect to RX on Vesc
-
-  #define PWM_PIN_OUT  25 //Define Digital PIN
-
-// LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
-  #define Cutter_Out 33
-  #define WARN_LIGHT_OUT 12
-  #define FAN_OUT   32
-
-  //IO 37 -> Wind direction
-  #define WindInAnalog  37
-
-  #define LED_RT 27 // down
-  // Pins Rotary Encoder -> Funktionen:
-  // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
-  #define ROTARY_SW 0
-  #define ROTARY_A  2
-  #define ROTARY_B  17
+// char txtOut[40];
+// char serialIn[20];
+// int serialInBufferPos;
+// int serialReceiverWaiting;
+// LoraTxMessage loraTxMsg;
+// LoraRxMessage loraRxMsg;
 
 
 
+//   #define LED_ONBOARD 35
+//   // Setup Lora neu
+//   #define LORA_SCK      9    // GPIO5  -- SX1276's SCK
+//   #define LORA_MISO    11   // GPIO19 -- SX1276's MISnO
+//   #define LORA_MOSI    10   // GPIO27 -- SX1276's MOSI
+//   #define LORA_SS       8   // GPIO18 -- SX1276's CS
+//   #define LORA_RST     12   // GPIO14 -- SX1276's RESET
+//   #define LORA_BUSY    13  // only on Heltec Module connected
+//   #define LORA_DI0     14   // GPIO26 -- SX1276's IRQ(Interrupt Request)
+// // SPI ist standart und muss nicht mit angegeben werden
+// SX1262 radio = new Module(LORA_SS, LORA_DI0, LORA_RST, LORA_BUSY);
 
-  #elif BUILD_TYPE == BUILD_TYPE_HELTEC_RL
-  #warning "Now compiling for Heltec with RadioLib"
-  #include <RadioLib.h>
 
-  #define LED_ONBOARD 35
-  // Setup Lora neu
-  #define LORA_SCK      9    // GPIO5  -- SX1276's SCK
-  #define LORA_MISO    11   // GPIO19 -- SX1276's MISnO
-  #define LORA_MOSI    10   // GPIO27 -- SX1276's MOSI
-  #define LORA_SS       8   // GPIO18 -- SX1276's CS
-  #define LORA_RST     12   // GPIO14 -- SX1276's RESET
-  #define LORA_BUSY    13  // only on Heltec Module connected
-  #define LORA_DI0     14   // GPIO26 -- SX1276's IRQ(Interrupt Request)
+// uint32_t lastSeq = 0;
+// bool firstPacket = true;
+// bool packetReceived = false;
 
-  SX1262 Lora = new Module(LORA_SS, LORA_DI0, LORA_RST, LORA_BUSY);
-  int radioTransmissionState = RADIOLIB_ERR_NONE;
-  void lora_init(void){
-    Serial.println("Start SPI");
-    SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
+// void onReceive(void){
+//   packetReceived = true;
+// }
+// void lora_init(void){
+//   int state;
+//   Serial.println("SX1262 Reichweiten-Empfänger startet...");
+//   state = radio.begin(866.5, 125.0, 8, 5, 0x12, 14);
+//   if (state != RADIOLIB_ERR_NONE) {
+//     Serial.print("Init fehlgeschlagen: ");
+//     Serial.println(state);
+//     while (true);
+//   }
 
-    int state = Lora.begin( 866.5, 125.0, 9, 7, 0x12, 20, 8, 1.6, false);
-    
-    if (state != RADIOLIB_ERR_NONE){
-      Serial.println("Something wrong, can't begin LoRa radio");
-      return;
-    }
-    else{
-      Serial.println("Radio init success ");
-    }
-  }
+//   //radio.setDio1Action(onReceive);
+//   radio.setCRC(true);
+//   Serial.println("Empfänger bereit.");
+// }
 
-  bool lora_send_packet(void){ // on SX126x 
-    radioTransmissionState = Lora.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
-    if(radioTransmissionState == RADIOLIB_ERR_NONE){
-      return 1;
-    }
-    else{
-      return 0;
-    }
-  }
+//   bool lora_send_packet(void){ // on SX126x 
+//    // Serial.println("  → Sende Antwort...");
+//     int state = radio.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
 
-  bool lora_read_packet(void){
-    int recState = Lora.receive(loraRxMsg.byte, 5);
-    if(recState == RADIOLIB_ERR_NONE){
-      digitalWrite(LED_ONBOARD, 1);
-      delay(2);
-      rssi = Lora.getRSSI();
-      snr = Lora.getSNR();
-      digitalWrite(LED_ONBOARD, 0);
-      return 1;
-    }
-    else{
-      return 0;
-    }
-    
-  }
-  // Pins Rotary Encoder
+//     if (state != RADIOLIB_ERR_NONE) {
+//       Serial.print("  ! Antwort-Senden fehlgeschlagen: ");
+//       Serial.println(state);
+//       return 0;
+//     }
+//     else{
+//       radio.startReceive();
+//       return 1;
+//     }
+//   }
 
-  #define ROTARY_SW  2
-  #define ROTARY_A   3
-  #define ROTARY_B   4
+// bool lora_read_packet(void){
+//   static uint32_t lastRx, now;
+//   int state = radio.receive(loraRxMsg.byte, sizeof(loraRxMsg.byte));
+//   if (state == RADIOLIB_ERR_NONE && radio.getPacketLength() == sizeof(loraRxMsg.byte)) {
+//     now = millis();
+//     uint32_t diff = now - lastRx;
+//     lastRx = now;
+//     Serial.printf("Delta: %4d", diff);
+//     digitalWrite(LED_ONBOARD, 1);
+//     delay(2);
+//     rssi = radio.getRSSI();
+//     snr = radio.getSNR();
+//     digitalWrite(LED_ONBOARD, 0);
+//     radio.startReceive();
+//     return 1;
+//     }
+//     else{
+//       radio.startReceive();
+//       return 0;
+//     }
+//   }
+//   // // Pins Rotary Encoder
 
-  // Buttons for state machine control
-  #define BUTTON_UP    5 // up
-  #define BUTTON_DOWN  6 // down
+//   // #define ROTARY_SW  2
+//   // #define ROTARY_A   3
+//   // #define ROTARY_B   4
 
-  // Pins OLED oisplay
+//   // // Buttons for state machine control
+//   // #define BUTTON_UP    5 // up
+//   // #define BUTTON_DOWN  6 // down
+
+//   // Pins OLED Display
 
   #define OLED_SDA  17
   #define OLED_SCL  18
   #define OLED_RST  21 // only in Heltec mode used
 
-  // No battery used in receiver
-  #define BAT_AN_IN  1
-  #define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
+//   // No battery used in receiver
+//   #define BAT_AN_IN  1
+//   #define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
 
-  // Define sonstiger Pins
-  // LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
-  //Battery Voltage IO 7 -> Wind direction
-  #define WindInAnalog  7
+//   // Define sonstiger Pins
+//   // LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
+//   //Battery Voltage IO 7 -> Wind direction
+//   // #define WindInAnalog  7
 
-  #define VESC_RX  38    //connect to TX on Vesc
-  #define VESC_TX  39    //connect to RX on Vesc
+//   #define VESC_RX  38    //connect to TX on Vesc
+//   #define VESC_TX  39    //connect to RX on Vesc
 
-  #define Cutter_Out 40 // up
-  #define LED_RT 41 // down
-  // Pins Rotary Encoder -> Funktionen:
-  // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
+//   // #define Cutter_Out 40 // up
+//   // #define LED_RT 41 // down
+//   // Pins Rotary Encoder -> Funktionen:
+//   // - Seil manuell einziehen (Zug mehr / weniger über drehen, bei Push SoftBreak)
 
-  #define WARN_LIGHT_OUT 42 
-  #define FAN_OUT   45
+//   // #define WARN_LIGHT_OUT 42 
+//   // #define FAN_OUT   45
 
-  #define PWM_PIN_OUT  46 //Define Digital PIN
-
-#endif
+//   #define PWM_PIN_OUT  46 //Define Digital PIN
 
 
 
 
-//vesc battery number of cells
-static int numberOfCells = 16;
-static int myMaxPull = 75;  // 0 - 127 [kg], must be scaled with VESC ppm settings
+
+// //vesc battery number of cells
+// static int numberOfCells = 16;
+// static int myMaxPull = 75;  // 0 - 127 [kg], must be scaled with VESC ppm settings
 
 
 
-SSD1306 display(0x3c, OLED_SDA, OLED_SCL);
+SSD1306 display(0x3C, OLED_SDA, OLED_SCL);
 
-//Using VescUart librarie to read from Vesc (https://github.com/SolidGeek/VescUart/)
-// Uart old
-// #define VESC_RX  14    //connect to TX on Vesc
-// #define VESC_TX  2    //connect to RX on Vesc
-// Uart new
+// //Using VescUart librarie to read from Vesc (https://github.com/SolidGeek/VescUart/)
+// // Uart old
+// // #define VESC_RX  14    //connect to TX on Vesc
+// // #define VESC_TX  2    //connect to RX on Vesc
+// // Uart new
 
-VescUart vescUART;
+// VescUart vescUART;
 
-// PWM signal to vesc
-#define PWM_TIME_0      950.0    //PWM time in ms for 0% , PWM below will be ignored!! need XXX.0!!!
-#define PWM_TIME_100    2000.0   //PWM time in ms for 100%, PWM above will be ignored!!
+// // PWM signal to vesc
+// #define PWM_TIME_0      950.0    //PWM time in ms for 0% , PWM below will be ignored!! need XXX.0!!!
+// #define PWM_TIME_100    2000.0   //PWM time in ms for 100%, PWM above will be ignored!!
 
-static int loopStep = 0;
-static uint8_t activeTxId = 0;
+// static int loopStep = 0;
+// static uint8_t activeTxId = 0;
 
-int smoothStep = 0;    // used to smooth pull changes
-int hardBrake = -20;  //-20 kg
-int softBrake = -7;  //-7 kg
-int defaultPull = 7;  //7 kg
-int prePullScale = 20;      //20 % of myMaxPull
-int takeOffPullScale = 50;  //50 % of myMaxPull
-int fullPullScale = 80;     //80 % of myMaxPull
-int strongPullScale = 100;  //100 % of myMaxPull
+// int smoothStep = 0;    // used to smooth pull changes
+// int hardBrake = -20;  //-20 kg
+// int softBrake = -7;  //-7 kg
+// int defaultPull = 7;  //7 kg
+// int prePullScale = 20;      //20 % of myMaxPull
+// int takeOffPullScale = 50;  //50 % of myMaxPull
+// int fullPullScale = 80;     //80 % of myMaxPull
+// int strongPullScale = 100;  //100 % of myMaxPull
 
-int currentId = 0;
-int currentState = -1;
-// pull value send to VESC --> default soft brake
-// defined as int to allow smooth changes without overrun
-int currentPull = softBrake;     // active range -127 to 127
-int8_t targetPullValue = 0;    // received from lora transmitter or rewinding winch mode
-int rotaryPull = 0; // set by rotary and reset to 0 if lora link != -1
+// int currentId = 0;
+// int currentState = -1;
+// // pull value send to VESC --> default soft brake
+// // defined as int to allow smooth changes without overrun
+// int currentPull = softBrake;     // active range -127 to 127
+// int8_t targetPullValue = 0;    // received from lora transmitter or rewinding winch mode
+// int rotaryPull = 0; // set by rotary and reset to 0 if lora link != -1
 
-uint8_t vescBattery = 0;
-uint8_t vescTempMotor = 0;
-unsigned long lastTxLoraMessageMillis = 0;
-unsigned long previousTxLoraMessageMillis = 0;
-unsigned long lastRxLoraMessageMillis = 0;
-unsigned long previousRxLoraMessageMillis = 0;
-uint32_t  pwmReadTimeValue = 0;
-uint32_t  pwmWriteTimeValue = 0;
-unsigned long lastWritePWMMillis = 0;
-unsigned int loraErrorCount = 0;
-unsigned long loraErrorMillis = 0;
-
-
-int encValue = 0;
-unsigned char encIn, encInAlt, enc0, enc1, enc2;
-void rotaryInterrupt(void){
-  encIn = digitalRead(ROTARY_A)+digitalRead(ROTARY_B)*2;
-  if(encInAlt != encIn){
-    encInAlt = encIn;
-    enc0 = enc1;
-    enc1 = enc2;
-    enc2 = encIn;
-    if((enc0 == 0)&&(enc1 == 1)&&(enc2 == 3)){
-      encValue -= 1;
-    }
-    if((enc0 == 3)&&(enc1 == 2)&&(enc2 == 0)){
-      encValue -= 1;
-    }
-    if((enc0 == 0)&&(enc1 == 2)&&(enc2 == 3)){
-      encValue += 1;
-    }
-    if((enc0 == 3)&&(enc1 == 1)&&(enc2 == 0)){
-      encValue += 1;
-    }
-  }
-}
-
-void encoderInit(void){
-  pinMode(ROTARY_A, INPUT_PULLUP);
-  pinMode(ROTARY_B, INPUT_PULLUP);
-  attachInterrupt(ROTARY_A, rotaryInterrupt, CHANGE);
-  attachInterrupt(ROTARY_B, rotaryInterrupt, CHANGE);
-}
-
-void pulseOut(int pin, int us)
-{
-   digitalWrite(pin, HIGH);
-   us = max(us - 20, 1);  //biase caused by digital write/read
-   delayMicroseconds(us);
-   digitalWrite(pin, LOW);
-}
-
-void pullByUart(int current){
-  if(current > 0){
-    vescUART.setCurrent(current);
-  }
-  else{
-    vescUART.setBrakeCurrent(current);
-  }
-}
-
-#define WIND_VALUE_OFFSET 112
-uint8_t get_wind_direction(void){
-  // Wind direction from potentiometer value 0 ... 4096
-  // output 7 Bit max, value 0 ... 36 is direction with factor 10 degree
-  uint16_t anValue = analogRead(WindInAnalog);
-  if(anValue < WIND_VALUE_OFFSET){
-    anValue = 4095 - WIND_VALUE_OFFSET; 
-  }
-  else{
-    anValue -= WIND_VALUE_OFFSET;
-  }
-  anValue /= 112;
-  // Serial.print("AN Wind: ");
-  // Serial.println(anValue);
-  return anValue;
-}
-uint8_t startupCounter = 0;
-
-uint32_t nextSendTime;
-#define BOOT_Pin 0
-uint8_t bootPinIn, bootPinInAlt;
-
-void setup() {
-  EEPROM.begin(EEPROM_SIZE);
-  startupCounter = EEPROM.read(EEPROM_STARTUP_COUNTER)+1;
-  EEPROM.write(EEPROM_STARTUP_COUNTER, startupCounter);
-  EEPROM.commit();
-#if BUILD_TYPE == BUILD_TYPE_HELTEC_RL
-  pinMode(LED_ONBOARD, OUTPUT);
-  digitalWrite(LED_ONBOARD, 0);
-#endif
-  #ifdef OLED_RST
-    delay(10);
-    pinMode(OLED_RST, OUTPUT);
-    digitalWrite(OLED_RST, 1);
-    delay(40);
-    digitalWrite(OLED_RST, 0);
-    delay(40);
-    digitalWrite(OLED_RST, 1);
-  #endif
-
-  pinMode(BOOT_Pin, INPUT_PULLUP);
-  pinMode(Cutter_Out, OUTPUT);
-  digitalWrite(Cutter_Out, 0);
-  pinMode(LED_RT, OUTPUT);
-  digitalWrite(LED_RT, 1);
-  pinMode(WindInAnalog, ANALOG);
-  Serial.begin(115200);
-
-  encoderInit();
-  //Setup UART port for Vesc communication
-  Serial1.begin(115200, SERIAL_8N1, VESC_RX, VESC_TX);
-  vescUART.setSerialPort(&Serial1);
-  
-  //lora init
-  lora_init();
-
-  // display init
-  display.init();
-  display.flipScreenVertically();  
-
-  //PWM Pins
-  //pinMode(PWM_PIN_IN, INPUT);
-  pinMode(PWM_PIN_OUT, OUTPUT);
-  
-  display.clear();
-  display.setTextAlignment(TEXT_ALIGN_LEFT);
-  display.setFont(ArialMT_Plain_10);
-  Serial.printf("Starting Receiver \n");
-  display.drawString(0, 0, "Starting Receiver");
-  digitalWrite(LED_RT, 0);
-  nextSendTime = millis();
-
-  Serial.print("Startup number ");
-  Serial.print(startupCounter);
-  Serial.println(" done.");
-}
-
-uint32_t sendCycle =0;
-uint32_t now, lastSend, lastRead;
-uint16_t counter_send;
+// uint8_t vescBattery = 0;
+// uint8_t vescTempMotor = 0;
+// unsigned long lastTxLoraMessageMillis = 0;
+// unsigned long previousTxLoraMessageMillis = 0;
+// unsigned long lastRxLoraMessageMillis = 0;
+// unsigned long previousRxLoraMessageMillis = 0;
+// uint32_t  pwmReadTimeValue = 0;
+// uint32_t  pwmWriteTimeValue = 0;
+// unsigned long lastWritePWMMillis = 0;
+// unsigned int loraErrorCount = 0;
+// unsigned long loraErrorMillis = 0;
 
 
-void testLora(void){
-
-  display.clear();
-  display.display();
-  now = millis();
-  lastRead = now;
-
-  while(1){
-
-    now = millis();
-    
-    if(lora_read_packet()){
-
-      for(int i=0;i<5;i++){
-        loraTxMsg.byte[i]= loraRxMsg.byte[i];
-      }
-      loraTxMsg.byte[5]=0xBC;
-
-      Serial.printf("%8d:Read Radio %5d ", now, now - lastSend);
-      for(int i = 0;i < sizeof(loraRxMsg.byte); i++){
-        Serial.printf("0x%02X ", loraRxMsg.byte[i]);
-      }
-      Serial.println();
-      if(0){ // send answer
-        if(lora_send_packet()){
-          Serial.printf("%8d:Sent Radio packet nr: %5d ", now, counter_send++);
-          for(int i = 0;i < sizeof(loraTxMsg.byte); i++){
-            Serial.printf("0x%02X ", loraTxMsg.byte[i]);
-          }
-          Serial.println();
-        }
-        lastSend = now;
-      }
-    }
-  }
-
-}
-uint32_t nextTime = 0;
-void loop() {
- // testLora();
-
- loopStep++;
- // TODO activate rewinding winch mode here
-// while(1){
-//   now = millis();
-//   if(now >= nextTime){
-//     nextTime = now + 1000;
-//     get_wind_direction();
+// int encValue = 0;
+// unsigned char encIn, encInAlt, enc0, enc1, enc2;
+// void rotaryInterrupt(void){
+//   // encIn = digitalRead(ROTARY_A)+digitalRead(ROTARY_B)*2;
+//   if(encInAlt != encIn){
+//     encInAlt = encIn;
+//     enc0 = enc1;
+//     enc1 = enc2;
+//     enc2 = encIn;
+//     if((enc0 == 0)&&(enc1 == 1)&&(enc2 == 3)){
+//       encValue -= 1;
+//     }
+//     if((enc0 == 3)&&(enc1 == 2)&&(enc2 == 0)){
+//       encValue -= 1;
+//     }
+//     if((enc0 == 0)&&(enc1 == 2)&&(enc2 == 3)){
+//       encValue += 1;
+//     }
+//     if((enc0 == 3)&&(enc1 == 1)&&(enc2 == 0)){
+//       encValue += 1;
+//     }
 //   }
 // }
-  
 
- if (true) {
-    // screen
-    
-    if (loopStep % 2 == 0) { // Display aktualisieren
+// void encoderInit(void){
+//   // pinMode(ROTARY_A, INPUT_PULLUP);
+//   // pinMode(ROTARY_B, INPUT_PULLUP);
+//   // attachInterrupt(ROTARY_A, rotaryInterrupt, CHANGE);
+//   // attachInterrupt(ROTARY_B, rotaryInterrupt, CHANGE);
+// }
+
+// void pulseOut(int pin, int us)
+// {
+//    digitalWrite(pin, HIGH);
+//    us = max(us - 20, 1);  //biase caused by digital write/read
+//    delayMicroseconds(us);
+//    digitalWrite(pin, LOW);
+// }
+
+// void pullByUart(int current){
+//   if(current > 0){
+//     vescUART.setCurrent(current);
+//   }
+//   else{
+//     vescUART.setBrakeCurrent(current);
+//   }
+// }
+
+// #define WIND_VALUE_OFFSET 112
+// uint8_t get_wind_direction(void){
+//   // Wind direction from potentiometer value 0 ... 4096
+//   // output 7 Bit max, value 0 ... 36 is direction with factor 10 degree
+//   uint16_t anValue = 0;//analogRead(WindInAnalog);
+//   // if(anValue < WIND_VALUE_OFFSET){
+//   //   anValue = 4095 - WIND_VALUE_OFFSET; 
+//   // }
+//   // else{
+//   //   anValue -= WIND_VALUE_OFFSET;
+//   // }
+//   // anValue /= 112;
+//   // Serial.print("AN Wind: ");
+//   // Serial.println(anValue);
+//   return anValue;
+// }
+// uint8_t startupCounter = 0;
+
+// uint32_t nextSendTime;
+// #define BOOT_Pin 0
+// uint8_t bootPinIn, bootPinInAlt;
+#define VEXT_CTL 36
+// void setup() {
+//   EEPROM.begin(EEPROM_SIZE);
+//   startupCounter = EEPROM.read(EEPROM_STARTUP_COUNTER)+1;
+//   EEPROM.write(EEPROM_STARTUP_COUNTER, startupCounter);
+//   EEPROM.commit();
+//   pinMode(LED_ONBOARD, OUTPUT);
+//   digitalWrite(LED_ONBOARD, 0);
+
+//   #ifdef VEXT_CTL
+//     pinMode(VEXT_CTL, OUTPUT);
+//     digitalWrite(VEXT_CTL, 0);
+//   #endif
+
+//   #ifdef OLED_RST
+//     delay(10);
+//     pinMode(OLED_RST, OUTPUT);
+//     digitalWrite(OLED_RST, 1);
+//     delay(100);
+//     digitalWrite(OLED_RST, 0);
+//     delay(100);
+//     digitalWrite(OLED_RST, 1);
+//   #endif
+
+//   pinMode(BOOT_Pin, INPUT_PULLUP);
+//   // pinMode(Cutter_Out, OUTPUT);
+//   // digitalWrite(Cutter_Out, 0);
+//   // pinMode(LED_RT, OUTPUT);
+//   // digitalWrite(LED_RT, 1);
+//   // pinMode(WindInAnalog, ANALOG);
+//   Serial.begin(115200);
+
+//   encoderInit();
+//   //Setup UART port for Vesc communication
+//   Serial1.begin(115200, SERIAL_8N1, VESC_RX, VESC_TX);
+//   vescUART.setSerialPort(&Serial1);
+  
+//   //lora init
+//   lora_init();
+
+//   // display init
+//   delay(500);
+//   display.init();
+//   display.setBrightness(200);
+//   display.flipScreenVertically();  
+
+//   //PWM Pins
+//   //pinMode(PWM_PIN_IN, INPUT);
+//   pinMode(PWM_PIN_OUT, OUTPUT);
+  
+//   display.clear();
+//   display.setTextAlignment(TEXT_ALIGN_LEFT);
+//   display.setFont(ArialMT_Plain_10);
+//   Serial.printf("Starting Receiver \n");
+//   display.drawString(0, 0, "Starting Receiver");
+//   display.display();
+//   // digitalWrite(LED_RT, 0);
+//   nextSendTime = millis();
+
+//   Serial.print("Startup number ");
+//   Serial.print(startupCounter);
+//   Serial.println(" done.");
+// }
+
+// uint32_t sendCycle =0;
+// uint32_t now, lastSend, lastRead;
+// uint16_t counter_send;
+
+
+// uint32_t nextTime = 0;
+
+void updateDisplay(void){
       display.clear();
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
       //display.drawString(0, 0, currentId + String("-RX: (") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");
-      display.drawString(0, 0, currentId + String("-RX: (")+ rssi + "dBm, " + snr + ")");
-      display.setFont(ArialMT_Plain_24);  //10, 16, 24
-      if (currentState == -7){
-          display.drawString(0, 11, "Cutting");  
-          digitalWrite(Cutter_Out, 1);
-      }
-      else if (currentState > 0){
-          digitalWrite(Cutter_Out, 0);
-          display.drawString(0, 11, String("P ") + currentState + ": (" + currentPull + "kg)");  
-      } else {
-          digitalWrite(Cutter_Out, 0);
-          display.drawString(0, 11, String("B ") + currentState + ": (" + currentPull + "kg)");    
-      }
-      display.setFont(ArialMT_Plain_10);  //10, 16, 24
-      //display.drawString(0, 36, String("Error / Uptime{min}: ") + loraErrorCount + " / " + millis()/60000);
-      display.drawString(0, 36, String("B: ") + vescBattery + "%, M: " + vescTempMotor + "C" +" R"+encValue + " UP "+startupCounter); 
-      display.drawString(0, 48, String("Last TX / RX: ") + lastTxLoraMessageMillis/100 + " / " + lastRxLoraMessageMillis/100);
+      display.drawString(0, 0,  String("-RX:"));
       display.display();
     }
+
+// void loop() {
+//  if (true) {
+//     // screen
+//     loopStep++;
     
-    if(lora_read_packet()){ // Lora Frame lesen
-          if(loraRxMsg.startframe == 0xCB){          
-            Serial.print("Data from Lora: ");
-            Serial.printf("ID: %d State: %d PullValue: %d", loraRxMsg.id, loraRxMsg.currentState, loraRxMsg.pullValue);    
-            Serial.println();
-            digitalWrite(LED_RT, 1);
-              if (millis() > lastTxLoraMessageMillis + 5000){
-            activeTxId = loraRxMsg.id;
-          }
-          // The admin id 0 can allways take over
-          if (loraRxMsg.id == 0){
-            activeTxId = loraRxMsg.id;
-          }
-          if (loraRxMsg.id == activeTxId && loraRxMsg.pullValue == loraRxMsg.pullValueBackup) {
-              targetPullValue = loraRxMsg.pullValue;
-              currentId = loraRxMsg.id;
-              currentState = loraRxMsg.currentState;
-              previousTxLoraMessageMillis = lastTxLoraMessageMillis;  // remember time of previous paket
-              lastTxLoraMessageMillis = millis();
-              //Serial.printf("Value received: %d, RSSI: %d: , SNR: %d\n", loraRxMsg.pullValue, rssi, snr);
+//     if (loopStep % 2 == 0) { // Display aktualisieren
+//       display.clear();
+//       display.setTextAlignment(TEXT_ALIGN_LEFT);
+//       display.setFont(ArialMT_Plain_10);  //10, 16, 24
+//       //display.drawString(0, 0, currentId + String("-RX: (") + BL.getBatteryChargeLevel() + "%, " + rssi + "dBm, " + snr + ")");
+//       display.drawString(0, 0, currentId + String("-RX: (")+ rssi + "dBm, " + snr + ")");
+//       display.setFont(ArialMT_Plain_24);  //10, 16, 24
+//       if (currentState == -7){
+//           display.drawString(0, 11, "Cutting");  
+//           // digitalWrite(Cutter_Out, 1);
+//       }
+//       else if (currentState > 0){
+//           // digitalWrite(Cutter_Out, 0);
+//           display.drawString(0, 11, String("P ") + currentState + ": (" + currentPull + "kg)");  
+//       } else {
+//           // digitalWrite(Cutter_Out, 0);
+//           display.drawString(0, 11, String("B ") + currentState + ": (" + currentPull + "kg)");    
+//       }
+//       display.setFont(ArialMT_Plain_10);  //10, 16, 24
+//       //display.drawString(0, 36, String("Error / Uptime{min}: ") + loraErrorCount + " / " + millis()/60000);
+//       display.drawString(0, 36, String("B: ") + vescBattery + "%, M: " + vescTempMotor + "C" +" R"+encValue + " UP "+startupCounter); 
+//       display.drawString(0, 48, String("Last TX / RX: ") + lastTxLoraMessageMillis/100 + " / " + lastRxLoraMessageMillis/100);
+//       display.display();
+//     }
+    
+//     if(lora_read_packet()){ // Lora Frame lesen
+//         Serial.print("Lora Rx: ");
+//         for(int z=0;z<sizeof(loraRxMsg.byte);z++){
+//           Serial.printf("0x%02X ", loraRxMsg.byte[z]);
+//         }
+//         Serial.println("");
+
+//           if(loraRxMsg.startframe == 0xCB){          
+//             // Serial.print("Data from Lora: ");
+//             // Serial.printf("ID: %d State: %d PullValue: %d", loraRxMsg.id, loraRxMsg.currentState, loraRxMsg.pullValue);    
+//             // Serial.println();
+//             // digitalWrite(LED_RT, 1);
+//           if (millis() > lastTxLoraMessageMillis + 5000){
+//             activeTxId = loraRxMsg.id;
+//           }
+//           // The admin id 0 can allways take over
+//           if (loraRxMsg.id == 0){
+//             activeTxId = loraRxMsg.id;
+//           }
+//           if ((loraRxMsg.id == activeTxId) && (loraRxMsg.pullValue == loraRxMsg.pullValueBackup)) {
+//               targetPullValue = loraRxMsg.pullValue;
+//               currentId = loraRxMsg.id;
+//               currentState = loraRxMsg.currentState;
+//               previousTxLoraMessageMillis = lastTxLoraMessageMillis;  // remember time of previous paket
+//               lastTxLoraMessageMillis = millis();
+//               //Serial.printf("Value received: %d, RSSI: %d: , SNR: %d\n", loraRxMsg.pullValue, rssi, snr);
               
-              // send ackn after receiving a value
-              // delay(10);
-              loraTxMsg.startframe = 0xBC;
-              loraTxMsg.pullValue = currentPull;
-              loraTxMsg.tachometer = abs(vescUART.data.tachometer)/725;     // %100 --> in m, %10 --> to use only one byte for up to 2550m line lenght
-              //Serial.printf("Tacho: %d\r\n", vescUART.data.tachometer);
-              // alternate vescBatteryPercentage and vescTempMotor value on lora link to reduce packet size
-              if(loraTxMsg.dutyCycleOrWindDirection == 0){
-                loraTxMsg.dutyCycleOrWindDirection = 1;
-                loraTxMsg.dutyCycleOrWindDirektionValue = abs(vescUART.data.dutyCycleNow * 100);     //in %
-              }
-              else{ // Wind direction max value = 127, real 360 degree
-                    // direction will be transmitted by faktor 10, 0...36 
-                loraTxMsg.dutyCycleOrWindDirection = 1;
-                loraTxMsg.dutyCycleOrWindDirektionValue = get_wind_direction();
-              }
+//               // send ackn after receiving a value
+//               // delay(10);
+//               loraTxMsg.startframe = 0xBC;
+//               loraTxMsg.pullValue = currentPull;
+//               loraTxMsg.tachometer = abs(vescUART.data.tachometer)/725;     // %100 --> in m, %10 --> to use only one byte for up to 2550m line lenght
+//               //Serial.printf("Tacho: %d\r\n", vescUART.data.tachometer);
+//               // alternate vescBatteryPercentage and vescTempMotor value on lora link to reduce packet size
+//               if(loraTxMsg.dutyCycleOrWindDirection == 0){
+//                 loraTxMsg.dutyCycleOrWindDirection = 1;
+//                 loraTxMsg.dutyCycleOrWindDirektionValue = abs(vescUART.data.dutyCycleNow * 100);     //in %
+//               }
+//               else{ // Wind direction max value = 127, real 360 degree
+//                     // direction will be transmitted by faktor 10, 0...36 
+//                 loraTxMsg.dutyCycleOrWindDirection = 1;
+//                 loraTxMsg.dutyCycleOrWindDirektionValue = get_wind_direction();
+//               }
              
-              if (loraTxMsg.vescBatteryOrTempMotor == 0){
-                loraTxMsg.vescBatteryOrTempMotor = 1;
-                loraTxMsg.vescBatteryOrTempMotorValue = vescBattery;
-              } else {
-                loraTxMsg.vescBatteryOrTempMotor = 0;
-                loraTxMsg.vescBatteryOrTempMotorValue = vescTempMotor;
-              }
-              digitalWrite(LED_RT, 0);
+//               if (loraTxMsg.vescBatteryOrTempMotor == 0){
+//                 loraTxMsg.vescBatteryOrTempMotor = 1;
+//                 loraTxMsg.vescBatteryOrTempMotorValue = vescBattery;
+//               } else {
+//                 loraTxMsg.vescBatteryOrTempMotor = 0;
+//                 loraTxMsg.vescBatteryOrTempMotorValue = vescTempMotor;
+//               }
+//               // digitalWrite(LED_RT, 0);
               
-              // Sende Paket nach empfang von Remote  
-              // Hier noch die Daten reinpacken
-              if (lora_send_packet()) {
-                Serial.printf("sending pull value %d: \r\n", targetPullValue);
-                lastTxLoraMessageMillis = millis();  
-              } 
-              else {
-                Serial.println("Lora send busy");
-              }          
-        }
-      }
-    }
-      // if no lora message for more then 1,5s --> show error on screen + acustic
-      if (millis() > lastTxLoraMessageMillis + 1500 ) {
-            //TODO acustic information
-            //TODO  red disply
-            display.clear();
-            display.display();
-            // log connection error
-           if (millis() > loraErrorMillis + 5000) {
-                loraErrorMillis = millis();
-                loraErrorCount = loraErrorCount + 1;
-           }
-      }
-      // Failsafe only when pull was active
-      if (currentState >= 1) {
-            // no packet for 1,5s --> failsave
-            if (millis() > lastTxLoraMessageMillis + 1500 ) {
-                 // A) keep default pull if connection issue during pull for up to 10 seconds
-                 if (millis() < lastTxLoraMessageMillis + 20000) {
-                    targetPullValue = defaultPull;   // default pull
-                    currentState = 1;
-                 } else {
-                 // B) go to soft brake afterwards
-                    targetPullValue = softBrake;     // soft brake
-                    currentState = -1;
-                 }
-            }
-      }
-      if (currentState == -7){
-        Serial.println("CUT line!!!");
-      }
- } 
- else {
-      // rewinding winch mode
-      // screen
-      if (loopStep % 10 == 0) {
-        display.clear();
-        display.setTextAlignment(TEXT_ALIGN_LEFT);
-        display.setFont(ArialMT_Plain_10);  //10, 16, 24
-        display.drawString(0, 0, "rewinding winch mode");
-        display.setFont(ArialMT_Plain_24);  //10, 16, 24
-        display.drawString(0, 14, String(targetPullValue) + "/" + currentPull + "kg");
-        display.display();
-      }
+              
+//               if (lora_send_packet()) {
 
-      // small pull value on pull out
-      // higher pull value on pull in
-      if (vescUART.data.dutyCycleNow > 0.02){
-        targetPullValue = 10;
-      } else if (vescUART.data.dutyCycleNow < -0.02){
-        targetPullValue = 17;
-      } else {
-        targetPullValue = -5; // no line movement --> soft brake
-      }
-      // ??? TODO higher pull value on fast pull out to avoid drum overshoot on line disconection ???
+//                 Serial.print("Lora Tx: ");
+//                 for(int z=0;z<sizeof(loraTxMsg.byte);z++){
+//                   Serial.printf("0x%02X ", loraTxMsg.byte[z]);
+//                 }
+//                 Serial.println("");
+
+//                 //  Serial.printf("sending pull value %d: \r\n", targetPullValue);
+//                   lastTxLoraMessageMillis = millis();  
+//               } 
+//               else {
+//                 Serial.println("Lora send busy");
+//               }       
+//         }
+//       }
+//     }
+//       // if no lora message for more then 1,5s --> show error on screen + acustic
+//       if (millis() > lastTxLoraMessageMillis + 1500 ) {
+//             //TODO acustic information
+//             //TODO  red disply
+//             display.clear();
+//             display.display();
+//             // log connection error
+//            if (millis() > loraErrorMillis + 5000) {
+//                 loraErrorMillis = millis();
+//                 loraErrorCount = loraErrorCount + 1;
+//            }
+//       }
+//       // Failsafe only when pull was active
+//       if (currentState >= 1) {
+//             // no packet for 1,5s --> failsave
+//             if (millis() > lastTxLoraMessageMillis + 1500 ) {
+//                  // A) keep default pull if connection issue during pull for up to 10 seconds
+//                  if (millis() < lastTxLoraMessageMillis + 20000) {
+//                     targetPullValue = defaultPull;   // default pull
+//                     currentState = 1;
+//                  } else {
+//                  // B) go to soft brake afterwards
+//                     targetPullValue = softBrake;     // soft brake
+//                     currentState = -1;
+//                  }
+//             }
+//       }
+//       if (currentState == -7){
+//         Serial.println("CUT line!!!");
+//       }
+//  } 
+ 
+//  else {
+//       // rewinding winch mode
+//       // screen
+//       if (loopStep % 10 == 0) {
+//         display.clear();
+//         display.setTextAlignment(TEXT_ALIGN_LEFT);
+//         display.setFont(ArialMT_Plain_10);  //10, 16, 24
+//         display.drawString(0, 0, "rewinding winch mode");
+//         display.setFont(ArialMT_Plain_24);  //10, 16, 24
+//         display.drawString(0, 14, String(targetPullValue) + "/" + currentPull + "kg");
+//         display.display();
+//       }
+
+//       // small pull value on pull out
+//       // higher pull value on pull in
+//       if (vescUART.data.dutyCycleNow > 0.02){
+//         targetPullValue = 10;
+//       } else if (vescUART.data.dutyCycleNow < -0.02){
+//         targetPullValue = 17;
+//       } else {
+//         targetPullValue = -5; // no line movement --> soft brake
+//       }
+//       // ??? TODO higher pull value on fast pull out to avoid drum overshoot on line disconection ???
       
- }  // end rewind winch mode
+//  }  // end rewind winch mode
 
  
 
-      // auto line stop
-      // (smouth to avoid line issues on main winch with rewinding winch)
-      // tachometer > 2 --> avoid autostop when no tachometer values are read from uart (--> 0)
-      if (vescUART.data.tachometer > 2 && vescUART.data.tachometer < 40) {
-          if (targetPullValue > defaultPull){
-              targetPullValue = defaultPull;
-          }
-          if (vescUART.data.tachometer < 20) {
-              targetPullValue = softBrake;
-          }
-          if (vescUART.data.tachometer < 10) {
-              targetPullValue = hardBrake;
-          }
-          // Serial.println("Autostop active, target pull value:");
-          // Serial.println(targetPullValue);
-      }
+//       // auto line stop
+//       // (smouth to avoid line issues on main winch with rewinding winch)
+//       // tachometer > 2 --> avoid autostop when no tachometer values are read from uart (--> 0)
+//       if (vescUART.data.tachometer > 2 && vescUART.data.tachometer < 40) {
+//           if (targetPullValue > defaultPull){
+//               targetPullValue = defaultPull;
+//           }
+//           if (vescUART.data.tachometer < 20) {
+//               targetPullValue = softBrake;
+//           }
+//           if (vescUART.data.tachometer < 10) {
+//               targetPullValue = hardBrake;
+//           }
+//           // Serial.println("Autostop active, target pull value:");
+//           // Serial.println(targetPullValue);
+//       }
  
-      // smooth changes
-      // if brake --> immediately active
-      if (targetPullValue < 0 ){
-          currentPull = targetPullValue;
-      } else {   
-          // change rate e.g. max. 50 kg / second
-          //reduce pull
-          if (currentPull > targetPullValue) {
-              smoothStep = 90 * (millis() - lastWritePWMMillis) / 1000;
-              if ((currentPull - smoothStep) > targetPullValue)   //avoid overshooting
-                  currentPull = currentPull - smoothStep;
-              else
-                  currentPull = targetPullValue;
-          //increase pull
-          } else if (currentPull < targetPullValue) {
-              smoothStep = 65 * (millis() - lastWritePWMMillis) / 1000;
-              if ((currentPull + smoothStep) < targetPullValue)   //avoid overshooting
-                  currentPull = currentPull + smoothStep;
-              else
-                  currentPull = targetPullValue;
-          }
-          //Serial.println(currentPull);
-          //avoid overrun
-          if (currentPull < -127)
-            currentPull = -127;
-          if (currentPull > 127)
-            currentPull = 127;
-      }
+//       // smooth changes
+//       // if brake --> immediately active
+//       if (targetPullValue < 0 ){
+//           currentPull = targetPullValue;
+//       } else {   
+//           // change rate e.g. max. 50 kg / second
+//           //reduce pull
+//           if (currentPull > targetPullValue) {
+//               smoothStep = 90 * (millis() - lastWritePWMMillis) / 1000;
+//               if ((currentPull - smoothStep) > targetPullValue)   //avoid overshooting
+//                   currentPull = currentPull - smoothStep;
+//               else
+//                   currentPull = targetPullValue;
+//           //increase pull
+//           } else if (currentPull < targetPullValue) {
+//               smoothStep = 65 * (millis() - lastWritePWMMillis) / 1000;
+//               if ((currentPull + smoothStep) < targetPullValue)   //avoid overshooting
+//                   currentPull = currentPull + smoothStep;
+//               else
+//                   currentPull = targetPullValue;
+//           }
+//           //Serial.println(currentPull);
+//           //avoid overrun
+//           if (currentPull < -127)
+//             currentPull = -127;
+//           if (currentPull > 127)
+//             currentPull = 127;
+//       }
       
-      delay(10);
-      //calculate PWM time for VESC
-      // write PWM signal to VESC
-      // pwmWriteTimeVal = (-127 ... 127 + 127)*(2000 - 950) / 254 + 950
-                          // -20 = 1392 
-                          // -7  = 1446
-                          //  0  = 1475
-                          //  7  = 1503
-                          //  20 = 1557
-                          // 90  = 1847 // max. für Solo
-                          // 127 = 2000 // max. für Tandem
-      // PWM to current:
-      // PWM range from 1.480 to 2.000
-      // 520 mV for pull range 0 ... 310 A
-      // 90 kg -> 0x372 V -> 222 A 
-      pwmWriteTimeValue = (currentPull + 127) * (PWM_TIME_100 - PWM_TIME_0) / 254 + PWM_TIME_0;   
-      // pulseOut ist eine Soft-PWM, HardPWM auch möglich?   
-      pulseOut(PWM_PIN_OUT, pwmWriteTimeValue);
-      lastWritePWMMillis = millis();
+//       delay(10);
+//       //calculate PWM time for VESC
+//       // write PWM signal to VESC
+//       // pwmWriteTimeVal = (-127 ... 127 + 127)*(2000 - 950) / 254 + 950
+//                           // -20 = 1392 
+//                           // -7  = 1446
+//                           //  0  = 1475
+//                           //  7  = 1503
+//                           //  20 = 1557
+//                           // 90  = 1847 // max. für Solo
+//                           // 127 = 2000 // max. für Tandem
+//       // PWM to current:
+//       // PWM range from 1.480 to 2.000
+//       // 520 mV for pull range 0 ... 310 A
+//       // 90 kg -> 0x372 V -> 222 A 
+//       pwmWriteTimeValue = (currentPull + 127) * (PWM_TIME_100 - PWM_TIME_0) / 254 + PWM_TIME_0;   
+//       // pulseOut ist eine Soft-PWM, HardPWM auch möglich?   
+//       pulseOut(PWM_PIN_OUT, pwmWriteTimeValue);
+//       lastWritePWMMillis = millis();
 
-      if (currentState != -1){
-        encValue = 0;
-      } else{
-        pullByUart(encValue);
-        // Serial.printf("Pull value: %d\r\n", encValue);
-      }
-      // Turn on warning light if in pull mode
-      if(currentState > 0){
-        digitalWrite(WARN_LIGHT_OUT, 1);
-      } else{
-        digitalWrite(WARN_LIGHT_OUT, 0);
-      }
+//       if (currentState != -1){
+//         encValue = 0;
+//       } else{
+//         pullByUart(encValue);
+//         // Serial.printf("Pull value: %d\r\n", encValue);
+//       }
+//       // Turn on warning light if in pull mode
+//       // if(currentState > 0){
+//       //   digitalWrite(WARN_LIGHT_OUT, 1);
+//       // } else{
+//       //   digitalWrite(WARN_LIGHT_OUT, 0);
+//       // }
 
-      delay(10);    //RC PWM usually has a signal every 20ms (50 Hz)
+//       delay(10);    //RC PWM usually has a signal every 20ms (50 Hz)
 
       
-      //read actual Vesc values from uart
-      if (loopStep % 10 == 0) {
-        if (vescUART.getVescValues()) {
-          vescBattery = CapCheckPerc(vescUART.data.inpVoltage, numberOfCells);    // vesc battery in %
-          vescTempMotor = vescUART.data.tempMotor;                                // motor temp in C   
+//       //read actual Vesc values from uart
+//       if (loopStep % 10 == 0) {
+//         if (vescUART.getVescValues()) {
+//           vescBattery = CapCheckPerc(vescUART.data.inpVoltage, numberOfCells);    // vesc battery in %
+//           vescTempMotor = vescUART.data.tempMotor;                                // motor temp in C   
 
-          // Turn on fan if Mosfet temp rises above 50 °C
-          if(vescUART.data.tempMosfet > 50){
-            digitalWrite(FAN_OUT, 1);
-          } else{
-            digitalWrite(FAN_OUT, 0);
-          }
+//           // Turn on fan if Mosfet temp rises above 50 °C
+//           // if(vescUART.data.tempMosfet > 50){
+//           //   digitalWrite(FAN_OUT, 1);
+//           // } else{
+//           //   digitalWrite(FAN_OUT, 0);
+//           // }
 
-        } else
-        {
-          //TODO send notification to lora
-          //measuredVescVal.tachometer = 0;
-          // Serial.println("Failed to get data from VESC!");
-        }
+//         } else
+//         {
+//           //TODO send notification to lora
+//           //measuredVescVal.tachometer = 0;
+//           // Serial.println("Failed to get data from VESC!");
+//         }
          
-     if(digitalRead(ROTARY_SW)==0){
-      encValue = 0;
-     }
+//     //  if(digitalRead(ROTARY_SW)==0){
+//     //   encValue = 0;
+//     //  }
 
-        // sprintf(txtOut,"Rotary pull: %d", encValue);
-        //Serial.println(txtOut);
-      }
+//         // sprintf(txtOut,"Rotary pull: %d", encValue);
+//         //Serial.println(txtOut);
+//       }
 
-      bootPinIn = digitalRead(BOOT_Pin);
-      if((bootPinIn==0)&&(bootPinInAlt != 0)){
-        Serial.println("Boot Switch !!!");
-      }
-      bootPinInAlt = bootPinIn;
+//       bootPinIn = digitalRead(BOOT_Pin);
+//       if((bootPinIn==0)&&(bootPinInAlt != 0)){
+//         Serial.println("Boot Switch !!!");
+//       }
+//       bootPinInAlt = bootPinIn;
 
-      char rcChar; 
-      if(Serial.available()){
+//       char rcChar; 
+//       if(Serial.available()){
         
-        Serial.read(&rcChar, 1);
-        Serial.printf("Got char %c ", rcChar);
-        if(rcChar == 'r'){
-          serialInBufferPos = 0;
-          serialIn[serialInBufferPos++] =rcChar; 
-          serialReceiverWaiting = 1;
-        }
-        else if(serialReceiverWaiting){
-          serialIn[serialInBufferPos++] =rcChar; 
-        }
-        if(serialInBufferPos >= 3){
-          serialReceiverWaiting = 0;
-          serialIn[3]= 0;
-          if(strcmp("rst", serialIn)==0){
-            Serial.println("got reset command!");
-            EEPROM.write(EEPROM_STARTUP_COUNTER, 0);
-            EEPROM.commit();
-          }
-        }
+//         Serial.read(&rcChar, 1);
+//         Serial.printf("Got char %c ", rcChar);
+//         if(rcChar == 'r'){
+//           serialInBufferPos = 0;
+//           serialIn[serialInBufferPos++] =rcChar; 
+//           serialReceiverWaiting = 1;
+//         }
+//         else if(serialReceiverWaiting){
+//           serialIn[serialInBufferPos++] =rcChar; 
+//         }
+//         if(serialInBufferPos >= 3){
+//           serialReceiverWaiting = 0;
+//           serialIn[3]= 0;
+//           if(strcmp("rst", serialIn)==0){
+//             Serial.println("got reset command!");
+//             EEPROM.write(EEPROM_STARTUP_COUNTER, 0);
+//             EEPROM.commit();
+//           }
+//         }
+//       }
+// }
+
+
+// /////////
+#include <Arduino.h>
+#include <RadioLib.h>
+
+#define LORA_BUSY 13
+// Heltec V3 SX1262
+SX1262 radio = new Module(8, 14, 12, 13);  
+// CS, DIO1, RST, BUSY
+
+
+bool loraRxFlag;
+void radioInterrupt(void){
+  int irReason = radio.getIrqStatus();
+//  Serial.printf("Lora INT: %d\r\n", irReason);
+  if(irReason == RADIOLIB_SX126X_IRQ_RX_DONE){
+    Serial.println("Set Flag");
+    loraRxFlag = true;
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(500);
+  #ifdef VEXT_CTL
+    pinMode(VEXT_CTL, OUTPUT);
+    digitalWrite(VEXT_CTL, 0);
+  #endif
+
+  #ifdef OLED_RST
+    delay(10);
+    pinMode(OLED_RST, OUTPUT);
+    digitalWrite(OLED_RST, 1);
+    delay(100);
+    digitalWrite(OLED_RST, 0);
+    delay(100);
+    digitalWrite(OLED_RST, 1);
+  #endif
+
+display.init();
+
+  Serial.println("SX1262 Ping-Pong RX startet...");
+
+  int state = radio.begin(866.5, 125.0, 8, 5, 0x12, 14);
+  if (state != RADIOLIB_ERR_NONE) {
+    Serial.print("Init fehlgeschlagen: ");
+    Serial.println(state);
+    while (true);
+  }
+
+  radio.setCRC(true);
+  radio.setDio1Action(radioInterrupt);
+  radio.startReceive();
+  Serial.println("Empfänger bereit.");
+  
+}
+uint32_t now, lastRx, diff, num, loopPrint;
+void loop() {
+  uint8_t buffer[4];
+  now = millis();
+  // BLOCKIERENDES RECEIVE (Polling)
+  if(loraRxFlag){
+    loraRxFlag = false;
+    int state = radio.readData(buffer, sizeof(buffer));
+    if (state == RADIOLIB_ERR_NONE) {
+      diff = now - lastRx;
+      lastRx = now;
+      updateDisplay();
+      Serial.printf("Empf %4d %4d: ", num++, diff);
+      for (int i = 0; i < radio.getPacketLength(); i++) {
+        Serial.printf("0x%02X ", buffer[i]);
       }
+      Serial.println();
+
+      // Serial.print("RSSI: ");
+      // Serial.println(radio.getRSSI());
+      // Serial.print("SNR: ");
+      // Serial.println(radio.getSNR());
+
+      // Antwort senden
+      uint8_t reply[5] = { 0xBC, 0xBB, 0xCC, 0, buffer[2]};
+      Serial.println("Sende Antwort...");
+      delay(10);
+      radio.transmit(reply, sizeof(reply));
+      radio.startReceive();
+    }
+  }
+  // if(now > loopPrint){
+  //   loopPrint = now + 100;
+  //   Serial.printf("Loop %5d\r\n", now);
+  // }
 }

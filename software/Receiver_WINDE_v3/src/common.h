@@ -19,7 +19,7 @@ along with this program.If not, see <http://www.gnu.org/licenses/>.
 
 //send by transmitter
 typedef union{
-   uint8_t byte[6];
+   uint8_t byte[5];
    struct{
    uint8_t startframe;           // 0xBC --> from Base to ControlUnit
    int8_t pullValue;           // currently active pull value,  -127 - 0 --> 5 brake, 0 - 127 --> pull
@@ -32,7 +32,7 @@ typedef union{
 }LoraTxMessage;
 
 typedef union{
-   uint8_t byte[5];
+   uint8_t byte[4];
    struct {  
    uint8_t startframe;        // 0xCB --> from ControlUnit to Base
    uint8_t id : 4;              // unique id 1 - 15, id 0 is admin!

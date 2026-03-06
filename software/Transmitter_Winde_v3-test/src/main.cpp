@@ -1,4 +1,4 @@
-/*
+/* TEST
 Erweiterung der Funktionen: 
  - Rotary-Encoder um in Setup-Menü die max. Zugkraft einstellen zu können
   -> nur möglich wenn im Idle-Mode
@@ -32,22 +32,11 @@ static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 #include <WiFi.h>
 
 
-#define LORA_BW_LORA  125000 // kHz
-#define LORA_BW_RadioLib  125 // kHz
-// #define LORA_SPREADFACTOR 7  // 36ms trmt
-// #define LORA_SPREADFACTOR 8  // 72ms trmt
-#define LORA_SPREADFACTOR 9  // 125ms trmt
-// #define LORA_SPREADFACTOR 10 // 250ms trmt
-
 #define USE_ESPNOW
-
-
 #ifdef USE_ESPNOW
 #include <esp_now.h>
 
-
 uint8_t espnowTarget[]={0x7C, 0xDF, 0xA1, 0xED, 0x63, 0x18};
-
 typedef struct struct_message {
   int state;
   int kgSoll;
@@ -63,17 +52,8 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   Serial.print("\r\nLast Packet Send Status:\t");
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
 }
-
 #endif
 
-
-#define BUILD_TYPE_MH_ET_ESP32 1 
-#define BUILD_TYPE_HELTEC_V3   2 // with LoraRf Lib -> Not running actually
-#define BUILD_TYPE_HELTEC_RL   3
-
-#ifndef BUILD_TYPE
-#error "Must define BUILD_TYPE..."
-#endif
 
 #define EEPROM_SIZE 20
 #define EEPROM_DEVICE_ID 0
@@ -82,7 +62,7 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
 int rssi = 0;
 float snr = 0;
 String packSize = "--";
-String packet ;
+String packet;
 
 static int loopStep = 0;
 bool toogleSlow = true;
@@ -116,94 +96,6 @@ unsigned long previousRxLoraMessageMillis = 0;
 unsigned int loraErrorCount = 0;
 unsigned long loraErrorMillis = 0;
 
-#define LORA_BAND  868E6
-
-#if BUILD_TYPE == BUILD_TYPE_MH_ET_ESP32
-  #warning "Now compiling for MH-ET-ESP32"
-  #include <LoRa.h>
-  // Setup Lora neu
-  #define LORA_SCK     18    // GPIO5  -- SX1278's SCK
-  #define LORA_MISO    19   // GPIO19 -- SX1278's MISnO
-  #define LORA_MOSI    23   // GPIO27 -- SX1278's MOSI
-  #define LORA_SS       5   // GPIO18 -- SX1278's CS
-  #define LORA_RST     17   // GPIO14 -- SX1278's RESET
-  #define LORA_DI0     16   // GPIO26 -- SX1278's IRQ(Interrupt Request)
-
-  void loar_init(void){
-    Serial.println("Start SPI");
-    SPI.begin(SCK,MISO,MOSI,SS);
-    LoRa.setPins(LORA_SS,LORA_RST,LORA_DI0);
-    if (!LoRa.begin(LORA_BAND)) {   //EU: 868E6 US: 915E6
-      Serial.println("Starting LoRa failed!");
-      while (1);
-    }
-    LoRa.setTxPower(20, PA_OUTPUT_PA_BOOST_PIN);
-
-    LoRa.setSpreadingFactor(LORA_SPREADFACTOR);   // default is 7, 6 - 12
-    LoRa.enableCrc();
-    LoRa.setSignalBandwidth(LORA_BW_LORA);   //signalBandwidth - signal bandwidth in Hz, defaults to 125E3. Supported values are 7.8E3, 10.4E3, 15.6E3, 20.8E3, 31.25E3, 41.7E3, 62.5E3, 125E3, 250E3, and 500E3.
-  }
-
-  bool lora_send_packet(void){
-    if (LoRa.beginPacket()) { 
-      // returns 1 wenn sender nicht belegt ist
-      // mit beginPacket(1) wird der impilcitHandler ausgewählt, hier also explicit
-      // REG_FIFO_ADDR_PTR und REG_PAYLOAD_LENGTH werden auf 0 gesetzt
-      Serial.print("Send Lora pack");
-      LoRa.write((uint8_t*)&loraTxMsg, sizeof(loraTxMsg.byte));
-      //returns size of packet
-      // Payload length ermitteln
-
-      LoRa.endPacket();
-      // wenn 1 übergeben wird gewartet 
-      // auf TX-;Mode umschalten
-      // warten bis TX beendet 
-
-      return 1;
-    } 
-    else{
-      return 0;
-    }
-  }
-  bool lora_read_packet(void){
-    if (LoRa.parsePacket() >= sizeof(loraRxMsg.byte) ) {
-      // int LoRaClass::parsePacket(int size) size > 0 ? implicit Header : explicitHeader
-      // adjust for explHeader
-      // set FIFO addr to current RX addr
-      // put module to standby
-      // put module in single rx and long range mode
-      LoRa.readBytes((uint8_t *)&loraRxMsg, sizeof(loraRxMsg.byte));
-      // liest die daten aus dem FIFO
-      rssi = LoRa.packetRssi();
-      snr = LoRa.packetSnr();
-      sprintf(txtOut, "RecLoraPacket: 0x%X 0x%X 0x%X 0x%X", loraRxMsg.byte[0], loraRxMsg.byte[1], loraRxMsg.byte[2], loraRxMsg.byte[3]);
-      Serial.println(txtOut);
-      return 1;
-
-    }
-    else{
-      return 0;
-    }
-  }
-  // Pins Rotary Encoder
-  #define ROTARY_SW 14
-  #define ROTARY_A  32
-  #define ROTARY_B  33
-
-  #define OLED_SDA  21
-  #define OLED_SCL  22
-
-  #define BAT_AN_IN 35
-  #define BAT_EN_AN -1
-  Battery18650Stats BL(BAT_AN_IN, 1.7); // pin 34 old / 35 new v2.1 hw
-
-  // Buttons for state machine control
-  #define BUTTON_UP   26 // up
-  #define BUTTON_DOWN 27 // down
-  #define LED_ONBOARD -1
-
-#elif BUILD_TYPE == BUILD_TYPE_HELTEC_RL
-  #warning "Now compiling for Heltec with RadioLib"
   #include <RadioLib.h>
 
   #define LED_ONBOARD 35
@@ -218,25 +110,12 @@ unsigned long loraErrorMillis = 0;
 
   SX1262 Lora = new Module(LORA_SS, LORA_DI0, LORA_RST, LORA_BUSY);
   int radioTransmissionState = RADIOLIB_ERR_NONE;
-  void loar_init(void){
+  
+  void lora_init(void){
     Serial.println("Start SPI");
     SPI.begin(LORA_SCK, LORA_MISO, LORA_MOSI, LORA_SS);
 
-    int state = Lora.begin( 866.5, LORA_BW_RadioLib, LORA_SPREADFACTOR, 7, 0x12, 20, 8, 1.6, false);
-    /*
-    
-int16_t SX1262::begin(
-      float freq,               -> 868 MHz
-      float bw,                 -> 125 kHz
-      uint8_t sf,               -> 7
-      uint8_t cr,               -> 7
-      uint8_t syncWord,         -> 0x12 
-      int8_t power,             -> 20
-      uint16_t preambleLength,  -> 8 
-      float tcxoVoltage,        -> 1.6
-      bool useRegulatorLDO      -> false
-      ) 
-    */
+    int state = Lora.begin( 866.5, 125.0, 7, 7, 0x12, 20, 8, 1.6, false);
     
     if (state != RADIOLIB_ERR_NONE){
       Serial.println("Something wrong, can't begin LoRa radio");
@@ -258,7 +137,7 @@ int16_t SX1262::begin(
   }
 
   bool lora_read_packet(void){
-    int recState = Lora.receive(loraRxMsg.byte, 5);
+    int recState = Lora.receive(loraRxMsg.byte, 6);
     if(recState == RADIOLIB_ERR_NONE){
       digitalWrite(LED_ONBOARD, 1);
       delay(2);
@@ -270,7 +149,6 @@ int16_t SX1262::begin(
     else{
       return 0;
     }
-    
   }
   // Pins Rotary Encoder
   #define ROTARY_SW  2
@@ -281,8 +159,7 @@ int16_t SX1262::begin(
   #define BUTTON_UP    5 // up
   #define BUTTON_DOWN  6 // down
 
-  // Pins OLED oisplay
-
+  // Pins OLED Display
   #define OLED_SDA  17
   #define OLED_SCL  18
   #define OLED_RST  21 // only in Heltec mode used
@@ -293,7 +170,6 @@ int16_t SX1262::begin(
 
   #define LED_OUT     35 // 
 
-#endif
 
   Button2 btnUp = Button2(BUTTON_UP);
   Button2 btnDown = Button2(BUTTON_DOWN);
@@ -526,7 +402,6 @@ void setup() {
   Serial.print("Max Pull: ");
   Serial.println(myMaxPull);
 
-
   if(digitalRead(ROTARY_SW)==0){
     setupMenue();
   }
@@ -543,7 +418,7 @@ void setup() {
   delay(3000);
 
   //lora init
-  loar_init();
+  lora_init();
   
   btnUp.setPressedHandler(btnPressed);
   btnUp.setLongClickTime(1000);
@@ -552,7 +427,7 @@ void setup() {
   btnDown.setPressedHandler(btnPressed);
   btnDown.setLongClickTime(500);
   btnDown.setLongClickDetectedHandler(btnLongClickDetected);
-  btnDown.setDoubleClickTime(700);
+  btnDown.setDoubleClickTime(400);
   btnDown.setDoubleClickHandler(btnDownDoubleClick);
   btnDown.setReleasedHandler(btnReleased);
 
@@ -634,64 +509,60 @@ void set_lora_rc_flag(void){
 }
 
 void loop() {
-  // Testsoftware, only receiving messages
-  sendCounter = 0;
-  receiveCounter = 0;
-  lastSendTime = 0;
-  nextSendTime = millis()+50;
 
-  Lora.setPacketReceivedAction(set_lora_rc_flag);
+  // // Testsoftware, only receiving messages
+  // sendCounter = 0;
+  // receiveCounter = 0;
+  // lastSendTime = 0;
+  // nextSendTime = millis()+50;
 
-  while (1)
-  {
-    now = millis();
-    if(lora_rc_flag){
-      Lora.readData(loraRxMsg.byte, sizeof(loraRxMsg.byte));
-      Serial.printf("%8d: Received msg: ", now);
-      for(int i=0;i<sizeof(loraRxMsg.byte);i++){
-        Serial.printf("0x%02X ", loraRxMsg.byte[i]);
-      }
-      Serial.printf(" --> %5d ", receiveCounter ++);
-      Serial.println();
-      lora_rc_flag = 0;
-    }
+  // Lora.setPacketReceivedAction(set_lora_rc_flag);
 
+  // while (1)
+  // {
+  //   now = millis();
+  //   if(lora_rc_flag){
+  //     Lora.readData(loraRxMsg.byte, sizeof(loraRxMsg.byte));
+  //     Serial.printf("%8d: Received msg: ", now);
+  //     for(int i=0;i<sizeof(loraRxMsg.byte);i++){
+  //       Serial.printf("0x%02X ", loraRxMsg.byte[i]);
+  //     }
+  //     Serial.printf(" --> %5d ", receiveCounter ++);
+  //     Serial.println();
+  //     lora_rc_flag = 0;
+  //   }
 
-    // if(lora_read_packet()){
+  //   // if(lora_read_packet()){
 
-    //   digitalWrite(LED_ONBOARD, 1);
-    //   Serial.printf("%8d: Received msg: ", now);
-    //   for(int i=0;i<sizeof(loraRxMsg.byte);i++){
-    //     Serial.printf("0x%02X ", loraRxMsg.byte[i]);
-    //   }
-    //   Serial.println();
-    //   digitalWrite(LED_ONBOARD, 0);
-    // }
+  //   //   digitalWrite(LED_ONBOARD, 1);
+  //   //   Serial.printf("%8d: Received msg: ", now);
+  //   //   for(int i=0;i<sizeof(loraRxMsg.byte);i++){
+  //   //     Serial.printf("0x%02X ", loraRxMsg.byte[i]);
+  //   //   }
+  //   //   Serial.println();
+  //   //   digitalWrite(LED_ONBOARD, 0);
+  //   // }
 
-    if(now >= nextSendTime){
-      nextSendTime += SEND_DELAY;
-      loraTxMsg.byte[0]= 0xCB;
-      loraTxMsg.byte[1]= now>>16;
-      loraTxMsg.byte[2]= now>>8;
-      loraTxMsg.byte[3]= now;
-      loraTxMsg.byte[4]= sendCounter;
-      lora_send_packet();
-      Serial.printf("%4d: %8d Sent msg: ", now-lastSendTime, now);
-      lastSendTime = now;
-      for(int i=0;i<sizeof(loraTxMsg.byte);i++){
-        Serial.printf("0x%02X ", loraTxMsg.byte[i]);
-      }
-      Serial.printf(" --> %9d ", sendCounter ++);
-      Serial.println();
+  //   if(now >= nextSendTime){
+  //     nextSendTime += SEND_DELAY;
+  //     loraTxMsg.byte[0]= 0xCB;
+  //     loraTxMsg.byte[1]= myID;
+  //     loraTxMsg.byte[2]= now>>8;
+  //     loraTxMsg.byte[3]= now;
+  //     loraTxMsg.byte[4]= sendCounter;
+  //     lora_send_packet();
+  //     Serial.printf("%4d: %8d Sent msg: ", now-lastSendTime, now);
+  //     lastSendTime = now;
+  //     for(int i=0;i<sizeof(loraTxMsg.byte);i++){
+  //       Serial.printf("0x%02X ", loraTxMsg.byte[i]);
+  //     }
+  //     Serial.printf(" --> %9d ", sendCounter ++);
+  //     Serial.println();
 
-      Lora.startReceive();
-    }
+  //     Lora.startReceive();
+  //   }
 
-  }
-  
-
-
-
+  // }
 
     now = millis();
     if(now > nextMainTaskMillis){
@@ -793,6 +664,11 @@ void loop() {
               if (lora_send_packet()) {
                // Serial.printf("sending value %d: \n", targetPull);
                 lastTxLoraMessageMillis = millis();  
+                Serial.print("Lora Tx: ");
+                for(int z=0;z<5;z++){
+                  Serial.printf("0x%02X ", loraTxMsg.byte[z]);
+                }
+                Serial.println("");
               } 
               else {
                 Serial.println("Lora send busy");
@@ -806,6 +682,12 @@ void loop() {
       
           if(lora_read_packet()){
             if(loraRxMsg.startframe == 0xBC){
+              Serial.print("Lora Rx: ");
+              for(int z=0;z<6;z++){
+                Serial.printf("0x%02X ", loraRxMsg.byte[z]);
+              }
+              Serial.println("");
+
               currentPull = loraRxMsg.pullValue;
               // vescBatteryPercentage and vescTempMotor are alternated on lora link to reduce packet size
                 if (loraRxMsg.vescBatteryOrTempMotor == 1){
@@ -822,7 +704,7 @@ void loop() {
         }
           
   //      checkButtons();
-          btnUp.loop();
-          btnDown.loop();
     }
+    btnUp.loop();
+    btnDown.loop();
 }
