@@ -747,8 +747,4 @@ void loop() {
       radio.startReceive();
     }
   }
-  // if(now > loopPrint){
-  //   loopPrint = now + 100;
-  //   Serial.printf("Loop %5d\r\n", now);
-  // }
 }

@@ -99,12 +99,73 @@ unsigned int loraErrorCount = 0;
 unsigned long loraErrorMillis = 0;
 
 
-  #define LED_ONBOARD 35
-  // Setup Lora neu
-  #define LORA_SS       8   // GPIO18 -- SX1262's CS
-  #define LORA_RST     12   // GPIO14 -- SX1262's RESET
-  #define LORA_BUSY    13  // only on Heltec Module connected
-  #define LORA_DI1     14   // GPIO26 -- SX1262's IRQ(Interrupt Request)
+#define LED_ONBOARD 35
+// Setup Lora neu
+#define LORA_SS       8   // GPIO18 -- SX1262's CS
+#define LORA_RST     12   // GPIO14 -- SX1262's RESET
+#define LORA_BUSY    13  // only on Heltec Module connected
+#define LORA_DI1     14   // GPIO26 -- SX1262's IRQ(Interrupt Request)
+
+
+// Pins Rotary Encoder
+#define ROTARY_SW  2
+#define ROTARY_A   3
+#define ROTARY_B   4
+
+// Buttons for state machine control
+#define BUTTON_UP    5 // up
+#define BUTTON_DOWN  6 // down
+
+// Pins OLED oisplay
+#define OLED_SDA  17
+#define OLED_SCL  18
+#define OLED_RST  21 // only in Heltec mode used
+#define VEXT_CTL  36
+
+#define BAT_AN_IN  1
+#define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
+Battery18650Stats BL(BAT_AN_IN, 4.36); //Pin1 on heltec lora v3
+
+#define LED_OUT     35 // 
+
+
+Button2 btnUp = Button2(BUTTON_UP);
+Button2 btnDown = Button2(BUTTON_DOWN);
+// battery measurement
+//#define CONV_FACTOR 1.7
+//#define READS 20
+
+SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL); // SPI an G21 und G22
+  
+
+bool led_shutdownState;
+#define POWER_DOWN_DELAY 120000
+uint32_t powerDownTime;
+
+void power_manager(bool resetOffTime){
+  // Shutdown eingebaut damit beim Laden der Transmitter nicht die ganze Zeit Lora Band belegt wird.
+  // Hilft dem Laderegler das Ende des Ladevorgangs zuverlässig zu erkennen
+  uint32_t now = millis();
+  if(resetOffTime){
+    powerDownTime = now + POWER_DOWN_DELAY;
+  }
+  uint32_t remainingTime = (powerDownTime - now)/1000;
+  if(remainingTime < 100){
+    if(remainingTime % 2){
+      digitalWrite(LED_ONBOARD, 1);
+    }
+    else{
+      digitalWrite(LED_ONBOARD, 0);
+    }
+  }
+  if(now > powerDownTime){
+    display.clear();
+    digitalWrite(LED_ONBOARD, 0);
+    delay(100);
+    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    esp_deep_sleep_start();
+  }
+}
 
   SX1262 radio = new Module(LORA_SS, LORA_DI1, LORA_RST, LORA_BUSY);
 
@@ -113,7 +174,7 @@ void radioInterrupt(void){
   int irReason = radio.getIrqStatus();
 //  Serial.printf("Lora INT: %d\r\n", irReason);
   if(irReason == RADIOLIB_SX126X_IRQ_RX_DONE){
-    Serial.println("Set Flag");
+  //  Serial.println("Set Flag");
     loraRxFlag = true;
   }
 }
@@ -127,79 +188,57 @@ void lora_init(void){
     Serial.println(state);
     while (true);
   }
-
   radio.setCRC(true);
   radio.setDio1Action(radioInterrupt);
   radio.startReceive();
   Serial.println("Radio bereit.");
 }
 
-bool lora_send_packet(void){ // on SX126x 
-
+bool lora_send_packet(bool debug){ // on SX126x 
   int state = radio.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
-
-  if (state != RADIOLIB_ERR_NONE) {
-    Serial.print("  ! Senden fehlgeschlagen: ");
-    Serial.println(state);
-    delay(500);
-    radio.startReceive();
+  if(state != RADIOLIB_ERR_NONE){
+    if(debug) Serial.printf("%5d Radiolib Error: %d\r\n", millis(), state);
     return 0;
   }
-  else{
-    Serial.println(" Pack sent ");
-    radio.startReceive();
-    return 1;
-  }
+  radio.startReceive();
+  return 1;
 }
 
 bool lora_read_packet(void){
-  int state = radio.receive(loraRxMsg.byte, sizeof(loraRxMsg.byte));
-  if (state == RADIOLIB_ERR_NONE && radio.getPacketLength() == sizeof(loraRxMsg.byte)) {
-    digitalWrite(LED_ONBOARD, 1);
-    delay(2);
-    rssi = radio.getRSSI();
-    snr = radio.getSNR();
-    digitalWrite(LED_ONBOARD, 0);
-    radio.startReceive();
-    return 1;
-  }
-  else{
-    Serial.printf("Lora rec state: %d\r\n", state);
-    radio.startReceive();
+    uint8_t rxData[10];
+    int state = radio.readData(rxData, sizeof(loraRxMsg.byte));
+   //int state = radio.readData(loraRxMsg.byte, sizeof(loraRxMsg.byte));
+   // Serial.printf("Rx State: %d\r\n", state);
+    if (state == RADIOLIB_ERR_NONE) {
+      // got data from lora, update values on screen 
+      if(rxData[0]== 0xBC){ // check if it's valid data
+        memcpy(loraRxMsg.byte, rxData, sizeof(loraRxMsg.byte));
+        lastRxLoraMessageMillis = millis();
+        digitalWrite(LED_ONBOARD, 1);
+        delay(5);
+        digitalWrite(LED_ONBOARD, 0);
+        lastRxLoraMessageMillis = millis();
+        power_manager(true);
+        return 1;
+      }
+      
+      // Serial.printf("Empf: ");
+      // for (int i = 0; i < 5; i++) {
+      //   Serial.printf("0x%02X ", loraRxMsg.byte[i]);
+      // }
+      // Serial.println();
+
+      // Serial.print("RSSI: ");
+      // Serial.println(radio.getRSSI());
+      // Serial.print("SNR: ");
+      // Serial.println(radio.getSNR());
+    }
     return 0;
   }
-}
-  // Pins Rotary Encoder
-  #define ROTARY_SW  2
-  #define ROTARY_A   3
-  #define ROTARY_B   4
 
-  // Buttons for state machine control
-  #define BUTTON_UP    5 // up
-  #define BUTTON_DOWN  6 // down
-
-  // Pins OLED oisplay
-  #define OLED_SDA  17
-  #define OLED_SCL  18
-  #define OLED_RST  21 // only in Heltec mode used
-  #define VEXT_CTL  36
-
-  #define BAT_AN_IN  1
-  #define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
-  Battery18650Stats BL(BAT_AN_IN, 4.36); //Pin1 on heltec lora v3
-
-  #define LED_OUT     35 // 
-
-
-  Button2 btnUp = Button2(BUTTON_UP);
-  Button2 btnDown = Button2(BUTTON_DOWN);
-  // battery measurement
-  //#define CONV_FACTOR 1.7
-  //#define READS 20
-
-SSD1306Wire display(0x3c, OLED_SDA, OLED_SCL); // SPI an G21 und G22
 int encValue = 0;
 unsigned char encIn, encInAlt, enc0, enc1, enc2;
+
 void rotaryInterrupt(void){
   encIn = digitalRead(ROTARY_A)+digitalRead(ROTARY_B)*2;
   if(encInAlt != encIn){
@@ -385,41 +424,11 @@ void setupMenue(void){
   }
 }
 
-bool led_shutdownState;
-#define POWER_DOWN_DELAY 120000
-uint32_t powerDownTime;
-
-void power_manager(bool resetOffTime){
-  // Shutdown eingebaut damit beim Laden der Transmitter nicht die ganze Zeit Lora Band belegt wird.
-  // Hilft dem Laderegler das Ende des Ladevorgangs zuverlässig zu erkennen
-  uint32_t now = millis();
-  if(resetOffTime){
-    powerDownTime = now + POWER_DOWN_DELAY;
-  }
-  uint32_t remainingTime = (powerDownTime - now)/1000;
-  if(remainingTime < 100){
-    if(remainingTime % 2){
-      //digitalWrite(LED_ONBOARD, 1);
-    }
-    else{
-      digitalWrite(LED_ONBOARD, 0);
-    }
-  }
-  if(now > powerDownTime){
-    display.clear();
-    digitalWrite(LED_ONBOARD, 0);
-    delay(100);
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    esp_deep_sleep_start();
-  }
-}
-
-
 void setup() {
   power_manager(true);
-  powerDownTime = POWER_DOWN_DELAY;
   pinMode(LED_ONBOARD, OUTPUT);
   digitalWrite(LED_ONBOARD, 0);
+
   #ifdef VEXT_CTL
     pinMode(VEXT_CTL, OUTPUT);
     digitalWrite(VEXT_CTL, 0);
@@ -433,9 +442,7 @@ void setup() {
     digitalWrite(OLED_RST, 0);
     delay(40);
     digitalWrite(OLED_RST, 1);
-    pinMode(LED_ONBOARD, INPUT);
   #endif
-  
 
   delay(10);
   Serial.begin(115200);
@@ -490,7 +497,6 @@ void setup() {
   Serial.print("Max Pull: ");
   Serial.println(myMaxPull);
 
-
   if(digitalRead(ROTARY_SW)==0){
     setupMenue();
   }
@@ -525,7 +531,7 @@ void setup() {
   btnDown.setReleasedHandler(btnReleased);
 
   // admin --> scan for existing transmitter for a few seconds --> start up with his current pull state
-  if (myID == 0 ) {
+  if (myID == 0 ) { // ID 0 defines the master remote wich can take over control
       display.clear();
       display.setTextAlignment(TEXT_ALIGN_LEFT);
       display.setFont(ArialMT_Plain_16);
@@ -537,22 +543,19 @@ void setup() {
       while (millis() < lastTxLoraMessageMillis + 4000) {
           // packet from transmitter
           Serial.println("Read Lora packet "+String(millis()));
-          // if(loraRxFlag){
-          //   loraRxFlag = false;
-          //   if (lora_read_packet()) {
-          //     loraTxMsg.byte[0]= loraRxMsg.byte[0];
-          //     loraTxMsg.byte[1]= loraRxMsg.byte[1];
-          //     loraTxMsg.byte[2]= loraRxMsg.byte[2];
-          //     if (loraTxMsg.startframe == 0xCB) {
-          //         //found --> read state and exit
-          //         currentState = loraTxMsg.currentState;
-          //         targetPull = loraTxMsg.pullValue;
-          //         Serial.printf("Found existing transmitter, starting up with state: %d: %d \n", currentState, targetPull);
-          //         //exit search loop
-          //         lastTxLoraMessageMillis = millis() - 4000;
-          //     }
-          //   } 
-          // }
+          if(loraRxFlag){
+            loraRxFlag = false;
+            if (radio.readData(loraTxMsg.byte, sizeof(loraTxMsg.byte))) { // read data from different control unit if available
+              if (loraTxMsg.startframe == 0xCB) {
+                  //found --> read state and exit
+                  currentState = loraTxMsg.currentState;
+                  targetPull = loraTxMsg.pullValue;
+                  Serial.printf("Found existing transmitter, starting up with state: %d: %d \n", currentState, targetPull);
+                  //exit search loop
+                  lastTxLoraMessageMillis = millis() - 4000;
+              }
+            } 
+          }
           Serial.println("After read Lora packet "+String(millis()));
           if(millis()-lastTxLoraMessageMillis >= 3000){
             display.clear();
@@ -580,7 +583,7 @@ void setup() {
           }
        }
 
-  digitalWrite(LED_ONBOARD, 0);
+    digitalWrite(LED_ONBOARD, 0);
    }
 
    // reset to my transmitter id
@@ -593,51 +596,19 @@ unsigned int now;
 uint8_t dutyCycle;
 uint8_t windDirection;
 uint8_t pValue=0;
-void simpleLoraTest(void){
-  loraTxMsg.id = myID;
-  loraTxMsg.currentState = 1;
-  Serial.printf("Send Lora ID: 0x%02X\r\n", pValue);
-  loraTxMsg.pullValue = pValue;
-  loraTxMsg.pullValueBackup = pValue++;
-  loraTxMsg.startframe = 0xCB;
-  int state = radio.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
-  if(state != RADIOLIB_ERR_NONE){
-    Serial.printf("%5d Radiolib Error: %d\r\n", millis(), state);
-  }
-  radio.startReceive();
-}
 
 uint32_t nextLoraTx = 0;
-uint8_t loraRx[5];
 void loop() {
-  while(true){
+  // first of all manage lora communication
     now = millis();
-    if(now >= nextLoraTx){
-      nextLoraTx = now + 400;
-      simpleLoraTest();
-    }
+    // check for new msg from winch
     if(loraRxFlag==true){
       loraRxFlag = false;
-
-      int state = radio.readData(loraRx, 5);
-      Serial.printf("Rx State: %d\r\n", state);
-      if (state == RADIOLIB_ERR_NONE) {
-        Serial.printf("Empf: ");
-        for (int i = 0; i < 5; i++) {
-          Serial.printf("0x%02X ", loraRx[i]);
-        }
-        Serial.println();
-
-        Serial.print("RSSI: ");
-        Serial.println(radio.getRSSI());
-        Serial.print("SNR: ");
-        Serial.println(radio.getSNR());
-      }
+      lora_read_packet();
     }
     
-  }
+  
     if(now > nextMainTaskMillis){
-
       nextMainTaskMillis = now+100;
       loopStep++;
       rcWinch.timeout = false;
@@ -658,7 +629,7 @@ void loop() {
         toogleSlow = !toogleSlow;
       }
       if (loopStep % 5 == 0) {
-        // if no lora message for more then 1,5s --> show error on screen + acustic
+        // if no lora message for more then 1,5s --> show error on screen
         
         display.clear();
         display.setTextAlignment(TEXT_ALIGN_LEFT);
@@ -686,7 +657,6 @@ void loop() {
         esp_err_t result = esp_now_send(espnowTarget, (uint8_t *) &rcWinch, sizeof(rcWinch));
         #endif
       } 
-    
         // state machine
         // -2 = hard brake -1 = soft brake, 0 = no pull / no brake, 1 = default pull (2kg), 2 = pre pull, 3 = take off pull, 4 = full pull, 5 = extra strong pull
         switch(currentState) {
@@ -722,64 +692,28 @@ void loop() {
               break;
           }
           // send Lora message every 400ms  --> three lost packages lead to failsafe on receiver (>1,5s)
-          // send immediatly if state has changed
-          if (millis() > lastTxLoraMessageMillis + 500 ) {
-            
-              stateChanged = false;
-              loraTxMsg.startframe = 0xCB;
-              if(buttonFlags == 0x03){
-                loraTxMsg.currentState = -7;
-                Serial.println("Cut the line !!!");
-                rcWinch.cut = true;
-              }
-              else{
-                loraTxMsg.currentState = currentState;
-                rcWinch.cut = false;
-              }
-              loraTxMsg.pullValue = targetPull;
-              loraTxMsg.pullValueBackup = targetPull;
-              
-              lora_send_packet();
-              lastTxLoraMessageMillis = millis();  
-              
+
+          if(now >= nextLoraTx){
+            nextLoraTx = now + 400;
+            loraTxMsg.startframe = 0xCB;
+            if(buttonFlags == 0x03){
+              loraTxMsg.currentState = -7;
+              Serial.println("Cut the line !!!");
+              rcWinch.cut = true;
+            }
+            else{
+              loraTxMsg.currentState = currentState;
+              rcWinch.cut = false;
+            }
+            loraTxMsg.pullValue = targetPull;
+            loraTxMsg.pullValueBackup = targetPull;
+            // data set -> fire
+            lora_send_packet(false);
           }
-          // if (loraRxFlag) {
-          //   loraRxFlag = false;
-
-          //   //  if(lora_read_packet()){
-          //   //     // rssi = LoRa.getRSSI();
-          //   //     // snr = Lora.getSNR();
-          //   //     Serial.println("Got LoRa msg");
-          //   //     if(loraRxMsg.startframe == 0xBC){
-          //   //       currentPull = loraRxMsg.pullValue;
-          //   //       // vescBatteryPercentage and vescTempMotor are alternated on lora link to reduce packet size
-          //   //       if(loraRxMsg.dutyCycleOrWindDirection == 1){
-          //   //         windDirection = loraRxMsg.dutyCycleOrWindDirektionValue;
-          //   //       }
-          //   //       else{
-          //   //         dutyCycle = loraRxMsg.dutyCycleOrWindDirektionValue;
-          //   //       }
-
-          //   //       if (loraRxMsg.vescBatteryOrTempMotor == 1){
-          //   //         vescBattery = loraRxMsg.vescBatteryOrTempMotorValue;
-          //   //       } else {
-          //   //         vescTempMotor = loraRxMsg.vescBatteryOrTempMotorValue;
-          //   //       }
-          //   //       previousRxLoraMessageMillis = lastRxLoraMessageMillis;  // remember time of previous paket
-          //   //       lastRxLoraMessageMillis = millis();
-          //   //       //power_manager(true);
-
-          //   //       // Serial.printf("Value received: %d, RSSI: %d: , SNR: %d \n", loraRxMsg.pullValue, rssi, snr);
-          //   //     //  Serial.printf("tacho: %d, dutty: %d: \n", loraRxMsg.tachometer * 10, loraRxMsg.dutyCycleNow);
-          //   //     }
-          //   //     digitalWrite(LED_ONBOARD, 0);
-          //   //   }
-          
-          //   }
     }
-  //      checkButtons();
+    
   btnUp.loop();
   btnDown.loop();
-  //power_manager(false);
+  power_manager(false);
 }
 
