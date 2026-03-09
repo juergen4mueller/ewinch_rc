@@ -36,97 +36,42 @@ int serialReceiverWaiting;
 LoraTxMessage loraTxMsg;
 LoraRxMessage loraRxMsg;
 
-#define LED_ONBOARD 35
-SX1262 radio = new Module(8, 14, 12, 13);  
+#define LED_ONBOARD 0
+//SX1262 radio = new Module(8, 14, 12, 13);  
+SX1276 radio = new Module(18, 26, 14, RADIOLIB_NC);  
  
 bool loraRxFlag;
 void radioInterrupt(void){
-  int irReason = radio.getIrqFlags();
-  if(debug){
-    Serial.printf("IRQ fired: %d\r\n", irReason);
-  }
-  if(debug) Serial.printf("Lora INT: %d\r\n", irReason);
-  if(irReason == 0x12){ // 18 is RX IRQ
-    //Serial.println("Set Flag");
+  int irFlags = radio.getIrqFlags();
+  Serial.printf("Lora Int fired %d\r\n", irFlags);
+  
+  if(irFlags & 0x40){
     loraRxFlag = true;
   }
-  else{
-    if(irReason & 0x20){
-      Serial.println("Delete IRQ");
-      radio.clearIrq(RADIOLIB_SX126X_IRQ_ALL);
-    }
-  }
+  // int irFlags = radio.getIRQFlags();
+  // if(irFlags & RADIOLIB_SX127X_MASK_IRQ_FLAG_RX_DONE){
+  // }
 }
-
-void getLoraState(void){
-  uint16_t irq = radio.getIrqFlags();
-  Serial.printf("RL IRQ Status: 0x%X\r\n", irq);
-  // if(irq & RADIOLIB_SX126X_IRQ_RX_DONE) {
-  //     Serial.println("SX1262: RX_DONE");
-  // }
-  // if(irq & RADIOLIB_SX126X_IRQ_TX_DONE) {
-  //     Serial.println("SX1262: TX_DONE");
-  // }
-  // if(irq & RADIOLIB_SX126X_IRQ_TIMEOUT) {
-  //     Serial.println("SX1262: RX_TIMEOUT");
-  // }
-  // if(irq & RADIOLIB_SX126X_IRQ_CAD_DONE) {
-  //     Serial.println("SX1262: CAD_DONE");
-  // }
-
-}
+    
 
 
 void lora_init(void){
   Serial.println("Lora Receiver startet...");
-  int state = radio.begin(866.5, 125.0, 8, 5, 0x12, 14);
+  //int state = radio.begin(866.5, 125.0, 8, 5, 0x12, 14);
+  int state = radio.begin(866.5, 125.0, 8, 5, 0x12, 17);
   if (state != RADIOLIB_ERR_NONE) {
     Serial.print("Init fehlgeschlagen: ");
     Serial.println(state);
   }
 
   radio.setCRC(true);
-  radio.setDio1Action(radioInterrupt);
+  radio.setDio0Action(radioInterrupt, RISING);
+
+  // radio.setDio1Action(radioInterrupt);
   radio.startReceive();
   Serial.println("Empfänger bereit.");
 }
 
-//   bool lora_send_packet(void){ // on SX126x 
-//    // Serial.println("  → Sende Antwort...");
-//     int state = radio.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
-
-//     if (state != RADIOLIB_ERR_NONE) {
-//       Serial.print("  ! Antwort-Senden fehlgeschlagen: ");
-//       Serial.println(state);
-//       return 0;
-//     }
-//     else{
-//       radio.startReceive();
-//       return 1;
-//     }
-//   }
-
-// bool lora_read_packet(void){
-//   static uint32_t lastRx, now;
-//   int state = radio.receive(loraRxMsg.byte, sizeof(loraRxMsg.byte));
-//   if (state == RADIOLIB_ERR_NONE && radio.getPacketLength() == sizeof(loraRxMsg.byte)) {
-//     now = millis();
-//     uint32_t diff = now - lastRx;
-//     lastRx = now;
-//     Serial.printf("Delta: %4d", diff);
-//     digitalWrite(LED_ONBOARD, 1);
-//     delay(2);
-//     rssi = radio.getRSSI();
-//     snr = radio.getSNR();
-//     digitalWrite(LED_ONBOARD, 0);
-//     radio.startReceive();
-//     return 1;
-//     }
-//     else{
-//       radio.startReceive();
-//       return 0;
-//     }
-//   }
 //   // // Pins Rotary Encoder
 
 //   // #define ROTARY_SW  2
@@ -139,21 +84,21 @@ void lora_init(void){
 
 //   // Pins OLED Display
 
-  #define OLED_SDA  17
-  #define OLED_SCL  18
-  #define OLED_RST  21 // only in Heltec mode used
+  #define OLED_SDA  4
+  #define OLED_SCL  15
+  #define OLED_RST  16 // only in Heltec mode used
 
   // No battery used in receiver
-  #define BAT_AN_IN  1
-  #define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
+  #define BAT_AN_IN  13
+  //#define BAT_EN_AN 37 // Enable ADC divider for meassure BAT voltage
 
   // Define sonstiger Pins
   // LED's zur Statusausgabe, grün leuchtet wenn an, rot blitzt bei LoraRX auf
   //Battery Voltage IO 7 -> Wind direction
   // #define WindInAnalog  7
 
-  #define VESC_RX  38    //connect to TX on Vesc
-  #define VESC_TX  39    //connect to RX on Vesc
+  #define VESC_RX  22    //connect to TX on Vesc
+  #define VESC_TX  23    //connect to RX on Vesc
 
   // #define Cutter_Out 40 // up
   // #define LED_RT 41 // down
@@ -163,7 +108,7 @@ void lora_init(void){
   // #define WARN_LIGHT_OUT 42 
   // #define FAN_OUT   45
 
-  #define PWM_PIN_OUT  46 //Define Digital PIN
+  #define PWM_PIN_OUT  25 //Define Digital PIN
 
 
 
@@ -287,16 +232,19 @@ uint8_t get_wind_direction(void){
 uint8_t startupCounter = 0;
 
 uint32_t nextSendTime;
-#define BOOT_Pin 0
+#define BOOT_PIN 0
 uint8_t bootPinIn, bootPinInAlt;
-#define VEXT_CTL 36
+#define VEXT_CTL 21
 void setup() {
   EEPROM.begin(EEPROM_SIZE);
   startupCounter = EEPROM.read(EEPROM_STARTUP_COUNTER)+1;
   EEPROM.write(EEPROM_STARTUP_COUNTER, startupCounter);
   EEPROM.commit();
-  pinMode(LED_ONBOARD, OUTPUT);
-  digitalWrite(LED_ONBOARD, 0);
+  if(LED_ONBOARD > 0){
+    pinMode(LED_ONBOARD, OUTPUT);
+    digitalWrite(LED_ONBOARD, 0);
+  }
+  
 
   #ifdef VEXT_CTL
     pinMode(VEXT_CTL, OUTPUT);
@@ -313,7 +261,7 @@ void setup() {
     digitalWrite(OLED_RST, 1);
   #endif
 
-  pinMode(BOOT_Pin, INPUT_PULLUP);
+  pinMode(BOOT_PIN, INPUT_PULLUP);
   // pinMode(Cutter_Out, OUTPUT);
   // digitalWrite(Cutter_Out, 0);
   // pinMode(LED_RT, OUTPUT);
@@ -396,17 +344,17 @@ void loop() {
       }
       else{
         if(rxData[0]== 0xCB){
-          digitalWrite(LED_ONBOARD,1);
+          if(LED_ONBOARD)
+            digitalWrite(LED_ONBOARD,1);
           rssi = radio.getRSSI();
           snr = radio.getSNR();
           memcpy(loraRxMsg.byte, rxData, sizeof(loraRxMsg.byte));
-          if(debug){
-            Serial.print("Lora Rx: ");
-            for(int z=0;z<sizeof(loraRxMsg.byte);z++){
-              Serial.printf("0x%02X ", loraRxMsg.byte[z]);
-            }
-            Serial.println("");
+
+          Serial.print("Lora Rx: ");
+          for(int z=0;z<sizeof(loraRxMsg.byte);z++){
+            Serial.printf("0x%02X ", loraRxMsg.byte[z]);
           }
+          Serial.println("");
             // Serial.print("Data from Lora: ");
             // Serial.printf("ID: %d State: %d PullValue: %d", loraRxMsg.id, loraRxMsg.currentState, loraRxMsg.pullValue);    
             // Serial.println();
@@ -452,23 +400,23 @@ void loop() {
               }
               // digitalWrite(LED_RT, 0);
               delay(10);
-              digitalWrite(LED_ONBOARD, 0);
+              if(LED_ONBOARD) 
+                digitalWrite(LED_ONBOARD, 0);
               int txState = radio.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
               radio.startReceive();
               
               if (txState == RADIOLIB_ERR_NONE) {
-                if(debug){
-                  Serial.print("Lora Tx: ");
-                  for(int z=0;z<sizeof(loraTxMsg.byte);z++){
-                    Serial.printf("0x%02X ", loraTxMsg.byte[z]);
-                  }
-                  Serial.println("");
-                  Serial.printf("sending pull value %d: \r\n", targetPullValue);
+                Serial.print("Lora Tx: ");
+                for(int z=0;z<sizeof(loraTxMsg.byte);z++){
+                  Serial.printf("0x%02X ", loraTxMsg.byte[z]);
                 }
-                lastTxLoraMessageMillis = millis();  
+                Serial.println("");
+
+                if(debug)Serial.printf("sending pull value %d: \r\n", targetPullValue);
+                  lastTxLoraMessageMillis = millis();  
               } 
               else {
-                Serial.printf("Lora send error: 0x%X\r\n", txState);
+                Serial.println("Lora send error");
               }       
         }
     }
@@ -641,7 +589,7 @@ void loop() {
         //Serial.println(txtOut);
       }
 
-      bootPinIn = digitalRead(BOOT_Pin);
+      bootPinIn = digitalRead(BOOT_PIN);
       if((bootPinIn==0)&&(bootPinInAlt != 0)){
         Serial.println("Boot Switch !!!");
       }
@@ -652,9 +600,6 @@ void loop() {
         
         Serial.read(&rcChar, 1);
         Serial.printf("Got char %c ", rcChar);
-        if(rcChar == 'i'){ // info request
-          getLoraState();
-        }
         if(rcChar == 'd'){
           if(debug){
             debug = false;

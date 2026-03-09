@@ -36,6 +36,11 @@ static int myMaxPull = 85;  // 0 - 127 [kg], must be scaled with VESC ppm settin
 #ifdef USE_ESPNOW
 #include <esp_now.h>
 
+#define WIND_DIR_VAL    0
+#define DUTY_CYCLE_VAL  1
+#define MOTOR_TEMP_VAL  0
+#define BAT_SOC_VAL     1
+
 uint8_t espnowTarget[]={0x7C, 0xDF, 0xA1, 0xED, 0x63, 0x18};
 typedef struct struct_message {
   int state;
@@ -169,11 +174,25 @@ void power_manager(bool resetOffTime){
 
   SX1262 radio = new Module(LORA_SS, LORA_DI1, LORA_RST, LORA_BUSY);
 
+/*
+
+  int irReason = radio.getIrqFlags();
+  if(debug){
+    Serial.printf("IRQ fired: %d\r\n", irReason);
+  }
+  if(debug) Serial.printf("Lora INT: %d\r\n", irReason);
+  if(irReason == 18){ // 18 is RX IRQ
+    //Serial.println("Set Flag");
+    loraRxFlag = true;
+  }
+*/
+
+
 bool loraRxFlag;
 void radioInterrupt(void){
-  int irReason = radio.getIrqStatus();
+  int irReason = radio.getIrqFlags();
 //  Serial.printf("Lora INT: %d\r\n", irReason);
-  if(irReason == RADIOLIB_SX126X_IRQ_RX_DONE){
+  if(irReason == 18){
   //  Serial.println("Set Flag");
     loraRxFlag = true;
   }
@@ -604,7 +623,24 @@ void loop() {
     // check for new msg from winch
     if(loraRxFlag==true){
       loraRxFlag = false;
-      lora_read_packet();
+      if(lora_read_packet()){
+        currentPull = loraRxMsg.pullValue;
+        loraRxMsg.tachometer;
+        if(loraRxMsg.dutyCycleOrWindDirection== WIND_DIR_VAL){
+          windDirection = loraRxMsg.dutyCycleOrWindDirektionValue;
+        }
+        if(loraRxMsg.dutyCycleOrWindDirection== DUTY_CYCLE_VAL){
+          dutyCycle = loraRxMsg.dutyCycleOrWindDirektionValue;
+        }
+        if(loraRxMsg.vescBatteryOrTempMotor== MOTOR_TEMP_VAL){
+          vescTempMotor = loraRxMsg.vescBatteryOrTempMotorValue;
+        }
+        if(loraRxMsg.vescBatteryOrTempMotor== BAT_SOC_VAL){
+          vescBattery = loraRxMsg.vescBatteryOrTempMotorValue;
+        }
+
+      }
+
     }
     
   
@@ -647,6 +683,8 @@ void loop() {
 
         display.drawString(0, 36, String(loraRxMsg.tachometer * 10) + "m| " + String(dutyCycle) + "%" );
         display.display();
+
+        
 
         rcWinch.state = currentState;
         rcWinch.kgSoll = targetPull;
