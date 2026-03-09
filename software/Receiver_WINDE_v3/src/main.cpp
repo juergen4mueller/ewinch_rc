@@ -43,7 +43,7 @@ bool loraRxFlag;
 void radioInterrupt(void){
   int irReason = radio.getIrqFlags();
   if(debug){
-    Serial.printf("IRQ fired: %d\r\n", irReason);
+    Serial.printf("IRQ fired: 0x%X\r\n", irReason);
   }
   if(debug) Serial.printf("Lora INT: %d\r\n", irReason);
   if(irReason == 0x12){ // 18 is RX IRQ
@@ -51,8 +51,8 @@ void radioInterrupt(void){
     loraRxFlag = true;
   }
   else{
-    if(irReason & 0x20){
-      Serial.println("Delete IRQ");
+    if((irReason != 0x12)&&(irReason != 0x01)){
+      Serial.printf("IRQ: 0x%X -> Delete IRQ\r\n", irReason);
       radio.clearIrq(RADIOLIB_SX126X_IRQ_ALL);
     }
   }
@@ -61,19 +61,6 @@ void radioInterrupt(void){
 void getLoraState(void){
   uint16_t irq = radio.getIrqFlags();
   Serial.printf("RL IRQ Status: 0x%X\r\n", irq);
-  // if(irq & RADIOLIB_SX126X_IRQ_RX_DONE) {
-  //     Serial.println("SX1262: RX_DONE");
-  // }
-  // if(irq & RADIOLIB_SX126X_IRQ_TX_DONE) {
-  //     Serial.println("SX1262: TX_DONE");
-  // }
-  // if(irq & RADIOLIB_SX126X_IRQ_TIMEOUT) {
-  //     Serial.println("SX1262: RX_TIMEOUT");
-  // }
-  // if(irq & RADIOLIB_SX126X_IRQ_CAD_DONE) {
-  //     Serial.println("SX1262: CAD_DONE");
-  // }
-
 }
 
 
@@ -91,44 +78,7 @@ void lora_init(void){
   Serial.println("Empfänger bereit.");
 }
 
-//   bool lora_send_packet(void){ // on SX126x 
-//    // Serial.println("  → Sende Antwort...");
-//     int state = radio.transmit(loraTxMsg.byte, sizeof(loraTxMsg.byte));
-
-//     if (state != RADIOLIB_ERR_NONE) {
-//       Serial.print("  ! Antwort-Senden fehlgeschlagen: ");
-//       Serial.println(state);
-//       return 0;
-//     }
-//     else{
-//       radio.startReceive();
-//       return 1;
-//     }
-//   }
-
-// bool lora_read_packet(void){
-//   static uint32_t lastRx, now;
-//   int state = radio.receive(loraRxMsg.byte, sizeof(loraRxMsg.byte));
-//   if (state == RADIOLIB_ERR_NONE && radio.getPacketLength() == sizeof(loraRxMsg.byte)) {
-//     now = millis();
-//     uint32_t diff = now - lastRx;
-//     lastRx = now;
-//     Serial.printf("Delta: %4d", diff);
-//     digitalWrite(LED_ONBOARD, 1);
-//     delay(2);
-//     rssi = radio.getRSSI();
-//     snr = radio.getSNR();
-//     digitalWrite(LED_ONBOARD, 0);
-//     radio.startReceive();
-//     return 1;
-//     }
-//     else{
-//       radio.startReceive();
-//       return 0;
-//     }
-//   }
 //   // // Pins Rotary Encoder
-
 //   // #define ROTARY_SW  2
 //   // #define ROTARY_A   3
 //   // #define ROTARY_B   4
@@ -165,12 +115,8 @@ void lora_init(void){
 
   #define PWM_PIN_OUT  46 //Define Digital PIN
 
-
-
-
-
 // //vesc battery number of cells
-static int numberOfCells = 16;
+static int numberOfCells = 24; // LiFePo pack
 // static int myMaxPull = 75;  // 0 - 127 [kg], must be scaled with VESC ppm settings
 
 SSD1306 display(0x3C, OLED_SDA, OLED_SCL);
@@ -357,7 +303,7 @@ uint32_t sendCycle =0;
 uint32_t now, lastSend, lastRead;
 uint16_t counter_send;
 
-
+uint32_t loraRxCnt = 0, loraTxCnt = 0;
 uint32_t nextTime = 0;
 uint8_t rxData[10];
 void loop() {
@@ -385,7 +331,7 @@ void loop() {
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
       //display.drawString(0, 36, String("Error / Uptime{min}: ") + loraErrorCount + " / " + millis()/60000);
       display.drawString(0, 36, String("B: ") + vescBattery + "%, M: " + vescTempMotor + "C" +" R"+encValue + " UP "+startupCounter); 
-      display.drawString(0, 48, String("Last TX / RX: ") + lastTxLoraMessageMillis/100 + " / " + lastRxLoraMessageMillis/100);
+      display.drawString(0, 48, String("TX / RX: ") + loraRxCnt + " / " + loraTxCnt);
       display.display();
     }
     if(loraRxFlag){
@@ -396,6 +342,7 @@ void loop() {
       }
       else{
         if(rxData[0]== 0xCB){
+          loraRxCnt ++;
           digitalWrite(LED_ONBOARD,1);
           rssi = radio.getRSSI();
           snr = radio.getSNR();
@@ -457,6 +404,7 @@ void loop() {
               radio.startReceive();
               
               if (txState == RADIOLIB_ERR_NONE) {
+                loraTxCnt ++;
                 if(debug){
                   Serial.print("Lora Tx: ");
                   for(int z=0;z<sizeof(loraTxMsg.byte);z++){

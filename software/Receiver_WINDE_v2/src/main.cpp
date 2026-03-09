@@ -41,10 +41,18 @@ LoraRxMessage loraRxMsg;
 SX1276 radio = new Module(18, 26, 14, RADIOLIB_NC);  
  
 bool loraRxFlag;
+
+
+void getLoraState(void){
+  uint16_t irq = radio.getIrqFlags();
+  Serial.printf("RL IRQ Status: 0x%X\r\n", irq);
+}
+
 void radioInterrupt(void){
   int irFlags = radio.getIrqFlags();
-  Serial.printf("Lora Int fired %d\r\n", irFlags);
-  
+  if(debug){
+    Serial.printf("Lora Int fired %d\r\n", irFlags);
+  }
   if(irFlags & 0x40){
     loraRxFlag = true;
   }
@@ -52,8 +60,6 @@ void radioInterrupt(void){
   // if(irFlags & RADIOLIB_SX127X_MASK_IRQ_FLAG_RX_DONE){
   // }
 }
-    
-
 
 void lora_init(void){
   Serial.println("Lora Receiver startet...");
@@ -306,6 +312,7 @@ uint32_t now, lastSend, lastRead;
 uint16_t counter_send;
 
 
+uint32_t loraRxCnt = 0, loraTxCnt = 0;
 uint32_t nextTime = 0;
 uint8_t rxData[10];
 void loop() {
@@ -333,7 +340,7 @@ void loop() {
       display.setFont(ArialMT_Plain_10);  //10, 16, 24
       //display.drawString(0, 36, String("Error / Uptime{min}: ") + loraErrorCount + " / " + millis()/60000);
       display.drawString(0, 36, String("B: ") + vescBattery + "%, M: " + vescTempMotor + "C" +" R"+encValue + " UP "+startupCounter); 
-      display.drawString(0, 48, String("Last TX / RX: ") + lastTxLoraMessageMillis/100 + " / " + lastRxLoraMessageMillis/100);
+      display.drawString(0, 48, String("TX / RX: ") + loraRxCnt + " / " + loraTxCnt);
       display.display();
     }
     if(loraRxFlag){
@@ -344,21 +351,19 @@ void loop() {
       }
       else{
         if(rxData[0]== 0xCB){
+          loraRxCnt ++;
           if(LED_ONBOARD)
             digitalWrite(LED_ONBOARD,1);
           rssi = radio.getRSSI();
           snr = radio.getSNR();
           memcpy(loraRxMsg.byte, rxData, sizeof(loraRxMsg.byte));
-
-          Serial.print("Lora Rx: ");
-          for(int z=0;z<sizeof(loraRxMsg.byte);z++){
-            Serial.printf("0x%02X ", loraRxMsg.byte[z]);
+          if(debug){
+            Serial.print("Lora Rx: ");
+            for(int z=0;z<sizeof(loraRxMsg.byte);z++){
+              Serial.printf("0x%02X ", loraRxMsg.byte[z]);
+            }
+            Serial.println("");
           }
-          Serial.println("");
-            // Serial.print("Data from Lora: ");
-            // Serial.printf("ID: %d State: %d PullValue: %d", loraRxMsg.id, loraRxMsg.currentState, loraRxMsg.pullValue);    
-            // Serial.println();
-            // digitalWrite(LED_RT, 1);
           if (millis() > lastTxLoraMessageMillis + 5000){
             activeTxId = loraRxMsg.id;
           }
@@ -406,13 +411,15 @@ void loop() {
               radio.startReceive();
               
               if (txState == RADIOLIB_ERR_NONE) {
-                Serial.print("Lora Tx: ");
-                for(int z=0;z<sizeof(loraTxMsg.byte);z++){
-                  Serial.printf("0x%02X ", loraTxMsg.byte[z]);
+                loraTxCnt ++;
+                if(debug){  
+                  Serial.print("Lora Tx: ");
+                  for(int z=0;z<sizeof(loraTxMsg.byte);z++){
+                    Serial.printf("0x%02X ", loraTxMsg.byte[z]);
+                  }
+                  Serial.println("");
+                  Serial.printf("sending pull value %d: \r\n", targetPullValue);
                 }
-                Serial.println("");
-
-                if(debug)Serial.printf("sending pull value %d: \r\n", targetPullValue);
                   lastTxLoraMessageMillis = millis();  
               } 
               else {
@@ -600,6 +607,10 @@ void loop() {
         
         Serial.read(&rcChar, 1);
         Serial.printf("Got char %c ", rcChar);
+
+        if(rcChar == 'i'){ // info request
+          getLoraState();
+        }
         if(rcChar == 'd'){
           if(debug){
             debug = false;
