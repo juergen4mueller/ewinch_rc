@@ -63,7 +63,6 @@ void radioInterrupt(void){
 
 void lora_init(void){
   Serial.println("Lora Receiver startet...");
-  //int state = radio.begin(866.5, 125.0, 8, 5, 0x12, 14);
   int state = radio.begin(866.5, 125.0, 8, 5, 0x12, 17);
   if (state != RADIOLIB_ERR_NONE) {
     Serial.print("Init fehlgeschlagen: ");
